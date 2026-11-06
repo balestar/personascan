@@ -9,6 +9,7 @@ import { COUNTRY_CODES } from '../lib/countries'
 import { flagForCountry } from '../lib/countryFlag'
 import {
   addGeoBlock,
+  cancelSession,
   checkAdmin,
   clearAdminKey,
   createUser,
@@ -195,14 +196,45 @@ export function AdminPage() {
     }
   }
 
-  async function openSession(session: ScanSession) {
-    setSelectedSession(session)
+  async function openSession(session: ScanSession | { id?: string; sessionId?: string }) {
+    const id = ('id' in session && session.id) || ('sessionId' in session && session.sessionId) || ''
+    if (!id) {
+      setError('Session id missing — cannot open details.')
+      return
+    }
+    const seed =
+      'userId' in session && 'status' in session && 'expiresAt' in session
+        ? (session as ScanSession)
+        : sessions.find((s) => s.id === id) || null
+    setSelectedSession(seed)
     setDetailOpen(true)
+    setError('')
     try {
-      const full = await getSession(session.id)
+      const full = await getSession(id)
       setSelectedSession(full.session)
-    } catch {
-      /* list payload is enough for a first paint */
+    } catch (err) {
+      if (!seed) {
+        setDetailOpen(false)
+        setError(err instanceof Error ? err.message : 'Could not load session details')
+      }
+    }
+  }
+
+  async function onCancelSession(id: string) {
+    if (!id) return
+    if (!confirm('Cancel this session now? The scan link will stop working immediately.')) return
+    setLoading(true)
+    setError('')
+    try {
+      await cancelSession(id)
+      setNotice('Session cancelled.')
+      setDetailOpen(false)
+      setSelectedSession(null)
+      await refresh({ quiet: true })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cancel failed')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -497,40 +529,53 @@ export function AdminPage() {
               <p className="admin-empty">No live 20-minute sessions right now.</p>
             ) : (
               <ul className="admin-users">
-                {active.map((item) => (
-                  <li key={item.sessionId || item.link} className="admin-session admin-session--solo">
-                    <div className="admin-session-main">
-                      <strong>{item.title || item.deviceName || 'Awaiting device'}</strong>
-                      <span className="admin-meta">
-                        {item.name} · {item.email}
-                      </span>
-                      <span className="admin-meta">
-                        {item.status}
-                        {item.linkExpiresAt ? ` · ${minsLeft(item.linkExpiresAt)} min left` : ''}
-                        {item.lastIp ? ` · ${item.lastIp}` : ''}
-                      </span>
-                    </div>
-                    <div className="admin-actions">
-                      <button
-                        className="admin-btn admin-btn-glow"
-                        type="button"
-                        onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')}
-                      >
-                        Open scan
-                      </button>
-                      <button
-                        className="admin-btn admin-btn-ghost"
-                        type="button"
-                        onClick={() => {
-                          const full = sessions.find((s) => s.id === item.sessionId)
-                          if (full) openSession(full)
-                        }}
-                      >
-                        Details
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                {active.map((item) => {
+                  const sid = item.sessionId || (item as { id?: string }).id
+                  const full = sessions.find((s) => s.id === sid)
+                  return (
+                    <li key={sid || item.link} className="admin-session admin-session--solo">
+                      <div className="admin-session-main">
+                        <strong>{item.title || item.deviceName || full?.title || 'Awaiting device'}</strong>
+                        <span className="admin-meta">
+                          {item.name || full?.userName || 'Unknown'} · {item.email || full?.userEmail || '—'}
+                        </span>
+                        <span className="admin-meta">
+                          {item.status}
+                          {item.linkExpiresAt || full?.expiresAt
+                            ? ` · ${minsLeft(item.linkExpiresAt || full?.expiresAt)} min left`
+                            : ''}
+                          {item.lastIp || full?.geo?.ip ? ` · ${item.lastIp || full?.geo?.ip}` : ''}
+                        </span>
+                      </div>
+                      <div className="admin-actions">
+                        <button
+                          className="admin-btn admin-btn-glow"
+                          type="button"
+                          onClick={() => window.open(item.link || full?.link, '_blank', 'noopener,noreferrer')}
+                          disabled={!(item.link || full?.link)}
+                        >
+                          Open scan
+                        </button>
+                        <button
+                          className="admin-btn admin-btn-ghost"
+                          type="button"
+                          onClick={() => void openSession(full || { id: sid, sessionId: sid })}
+                          disabled={!sid}
+                        >
+                          Details
+                        </button>
+                        <button
+                          className="admin-btn admin-btn-danger"
+                          type="button"
+                          onClick={() => sid && void onCancelSession(sid)}
+                          disabled={!sid || loading}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </section>
@@ -647,6 +692,12 @@ export function AdminPage() {
         open={detailOpen}
         session={selectedSession}
         onClose={() => setDetailOpen(false)}
+        onCancel={
+          selectedSession?.id &&
+          (selectedSession.status === 'pending' || selectedSession.status === 'active')
+            ? () => void onCancelSession(selectedSession.id)
+            : undefined
+        }
       />
     </div>
   )

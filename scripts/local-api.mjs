@@ -311,6 +311,26 @@ const server = createServer(async (req, res) => {
       return json(res, { sessions })
     }
 
+    if (url.pathname === '/api/admin/sessions/cancel' && req.method === 'POST') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const body = await readBody(req)
+      const sid = String(body?.id || body?.sessionId || '').trim()
+      if (!sid) return json(res, { error: 'session id required' }, 400)
+      const session = await dbGetSession(sid)
+      if (!session) return json(res, { error: 'Session not found' }, 404)
+      const now = new Date().toISOString()
+      session.status = 'expired'
+      session.expiresAt = now
+      await dbUpsertSession(session)
+      const user = await dbGetUser(session.userId)
+      if (user) {
+        user.lastScanStatus = 'expired'
+        user.lastSeenAt = now
+        await dbUpsertUser(user)
+      }
+      return json(res, { ok: true, session: publicSession(session) })
+    }
+
     const sessionDetail = url.pathname.match(/^\/api\/admin\/sessions\/([^/]+)$/)
     if (sessionDetail && req.method === 'GET') {
       if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)

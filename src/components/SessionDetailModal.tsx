@@ -8,6 +8,7 @@ type Props = {
   open: boolean
   session: ScanSession | null
   onClose: () => void
+  onCancel?: () => void
 }
 
 function statusLabel(status: ScanSession['status']) {
@@ -78,7 +79,7 @@ function FindingDual({ finding, open, onToggle }: { finding: ScanFinding; open: 
   )
 }
 
-export function SessionDetailModal({ open, session, onClose }: Props) {
+export function SessionDetailModal({ open, session, onClose, onCancel }: Props) {
   const [live, setLive] = useState<ScanSession | null>(session)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -131,7 +132,7 @@ export function SessionDetailModal({ open, session, onClose }: Props) {
       title={view.title || view.deviceName || 'Scan session'}
       subtitle={`${view.userName} · ${view.userEmail} · ${statusLabel(view.status)}`}
       footer={
-        <div className="vault-sheet-actions">
+        <div className="vault-sheet-actions mail-send-actions">
           <button
             type="button"
             className="vault-btn vault-btn-ghost"
@@ -148,6 +149,11 @@ export function SessionDetailModal({ open, session, onClose }: Props) {
           >
             Open scan
           </button>
+          {onCancel ? (
+            <button type="button" className="vault-btn vault-btn-ghost mail-send-primary" onClick={onCancel}>
+              Cancel session
+            </button>
+          ) : null}
         </div>
       }
     >

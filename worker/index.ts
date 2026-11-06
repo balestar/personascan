@@ -396,14 +396,51 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
     }
     return json({
       active: live.map((s) => ({
+        sessionId: s.id,
         id: s.id,
         userId: s.user_id,
-        userName: s.user_name,
+        name: s.user_name,
+        email: s.user_email,
+        country: s.user_country,
         token: s.token,
         status: s.status,
         link: s.link,
+        linkExpiresAt: s.expires_at,
         expiresAt: s.expires_at,
+        title: s.title,
+        deviceName: s.device_name,
+        lastSeenAt: s.opened_at,
+        lastIp: (s.geo as Json | undefined)?.ip,
       })),
+    })
+  }
+
+  if (path === '/api/admin/sessions/cancel' && method === 'POST') {
+    if (!adminOk(request, env)) return json({ error: 'Unauthorized' }, 401)
+    const body = (await request.json().catch(() => null)) as { id?: string; sessionId?: string } | null
+    const sid = String(body?.id || body?.sessionId || '').trim()
+    if (!sid) return json({ error: 'session id required' }, 400)
+    const rows = (await sb(env, 'personascan_sessions', {
+      method: 'GET',
+      query: `?id=eq.${encodeURIComponent(sid)}&limit=1`,
+    })) as Json[]
+    if (!rows[0]) return json({ error: 'Session not found' }, 404)
+    const now = new Date().toISOString()
+    await sb(env, 'personascan_sessions', {
+      method: 'PATCH',
+      query: `?id=eq.${encodeURIComponent(sid)}`,
+      body: JSON.stringify({ status: 'expired', expires_at: now }),
+    })
+    if (rows[0].user_id) {
+      await sb(env, 'personascan_users', {
+        method: 'PATCH',
+        query: `?id=eq.${encodeURIComponent(String(rows[0].user_id))}`,
+        body: JSON.stringify({ last_scan_status: 'expired', last_seen_at: now }),
+      })
+    }
+    return json({
+      ok: true,
+      session: mapSession({ ...rows[0], status: 'expired', expires_at: now }),
     })
   }
 
