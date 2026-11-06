@@ -1,16 +1,55 @@
 /** Build real findings from client probe payload — no random simulated threats. */
 
 export function summarize(findings) {
+  const visible = findings.filter((f) => !f.adminOnly)
+  const outcomeOf = (f) => f.outcome || (f.status === 'threat' || f.status === 'warning' ? 'failed' : 'passed')
   return {
-    total: findings.length,
-    clear: findings.filter((f) => f.status === 'clear').length,
-    warning: findings.filter((f) => f.status === 'warning').length,
-    threat: findings.filter((f) => f.status === 'threat').length,
+    total: visible.length,
+    passed: visible.filter((f) => outcomeOf(f) === 'passed').length,
+    failed: visible.filter((f) => outcomeOf(f) === 'failed').length,
+    couldntRun: visible.filter((f) => outcomeOf(f) === 'couldnt_run').length,
+    clear: visible.filter((f) => f.status === 'clear').length,
+    warning: visible.filter((f) => f.status === 'warning').length,
+    threat: visible.filter((f) => f.status === 'threat').length,
   }
 }
 
-function f(partial) {
-  return partial
+function row(partial) {
+  const outcome = partial.outcome || 'passed'
+  const status =
+    partial.status ||
+    (outcome === 'failed' ? 'threat' : outcome === 'couldnt_run' ? 'info' : 'clear')
+  const severity =
+    partial.severity ||
+    (outcome === 'failed' ? 'high' : 'info')
+  return {
+    ...partial,
+    outcome,
+    status,
+    severity,
+    detail: partial.detail || partial.evidence || '',
+    evidence: partial.evidence || '',
+    adminOnly: Boolean(partial.adminOnly),
+  }
+}
+
+function permLine(perms = {}) {
+  const keys = ['camera', 'microphone', 'notifications', 'clipboardRead', 'clipboard-read', 'geolocation']
+  const seen = new Set()
+  const parts = []
+  for (const key of keys) {
+    if (perms[key] == null || seen.has(key.replace('clipboard-read', 'clipboardRead'))) continue
+    seen.add(key.replace('clipboard-read', 'clipboardRead'))
+    const label = key === 'clipboard-read' ? 'clipboard-read' : key
+    parts.push(`${label}=${perms[key]}`)
+  }
+  for (const [k, v] of Object.entries(perms)) {
+    const norm = k === 'clipboard-read' ? 'clipboardRead' : k
+    if (seen.has(norm)) continue
+    seen.add(norm)
+    parts.push(`${k}=${v}`)
+  }
+  return parts.join(' · ') || 'unavailable'
 }
 
 /**
@@ -24,271 +63,362 @@ export function buildFindingsFromProbes(input) {
   const probes = input.probes || {}
   const email = input.email || 'unknown'
   const country = input.country || 'Unknown'
-  const serverGeo = input.serverGeo || {}
   const findings = []
 
   findings.push(
-    f({
+    row({
       id: 'secure_context',
       category: 'Vulnerabilities and System Configuration',
       title: 'Secure browsing context',
-      severity: probes.secureContext ? 'info' : 'high',
-      status: probes.secureContext ? 'clear' : 'warning',
+      outcome: probes.secureContext ? 'passed' : 'failed',
+      evidence: `isSecureContext=${probes.secureContext === true}`,
       detail: probes.secureContext
         ? 'Session is running in a secure HTTPS context.'
         : 'Session is not in a secure context. Crypto wallet and clipboard APIs may be unreliable or blocked.',
+      severity: probes.secureContext ? 'info' : 'high',
+      status: probes.secureContext ? 'clear' : 'threat',
     }),
   )
 
   const webrtc = probes.webrtc || {}
-  findings.push(
-    f({
-      id: 'webrtc_ip_leak',
-      category: 'Data Leaks and Exfiltration Risks',
-      title: 'WebRTC local IP leak',
-      severity: webrtc.leak ? 'high' : 'info',
-      status: webrtc.leak ? 'warning' : 'clear',
-      detail: webrtc.leak
-        ? `Local/private ICE candidates were observed (${(webrtc.hostIps || []).join(', ') || 'host candidates present'}). VPN split-tunneling may be leaking your real LAN IP.`
-        : 'No private LAN ICE candidate leak was detected in the WebRTC probe.',
-    }),
-  )
-
-  const publicIp = probes.publicIp || serverGeo.ip
-  const geo = probes.ipGeo || serverGeo
-  findings.push(
-    f({
-      id: 'public_ip_geo',
-      category: 'Data Leaks and Exfiltration Risks',
-      title: 'Public IP & network location',
-      severity: 'info',
-      status: publicIp ? 'clear' : 'warning',
-      detail: publicIp
-        ? `Public IP ${publicIp}${geo.city || geo.country ? ` · ${[geo.city, geo.region, geo.country].filter(Boolean).join(', ')}` : ''}${geo.isp ? ` · ${geo.isp}` : ''}.`
-        : 'Could not resolve a public IP from this session.',
-    }),
-  )
-
-  const wallets = probes.wallets || {}
-  if (wallets.ethereum || wallets.solana || wallets.phantom) {
+  const iceList = [...(webrtc.localCandidates || [])]
+  const hostIps = [...(webrtc.hostIps || [])]
+  if (webrtc.unsupported || typeof webrtc.leak !== 'boolean' && !iceList.length) {
     findings.push(
-      f({
-        id: 'wallet_injection',
-        category: 'Wallet and App Integrity',
-        title: 'Injected Web3 wallet providers detected',
-        severity: 'info',
-        status: 'clear',
-        detail: `Live wallet injection found: ${(wallets.providerNames || []).join(', ') || 'provider present'} (${wallets.providerCount || 1} provider(s)). Confirm these are wallets you installed intentionally.`,
+      row({
+        id: 'webrtc_ip_leak',
+        category: 'Data Leaks and Exfiltration Risks',
+        title: 'WebRTC local IP leak',
+        outcome: 'couldnt_run',
+        evidence: webrtc.unsupported ? 'RTCPeerConnection unavailable' : 'No ICE candidates',
+        detail: 'WebRTC ICE gathering did not run in this browser, so a LAN-IP leak could not be measured.',
+      }),
+    )
+  } else if (!iceList.length && !hostIps.length) {
+    findings.push(
+      row({
+        id: 'webrtc_ip_leak',
+        category: 'Data Leaks and Exfiltration Risks',
+        title: 'WebRTC local IP leak',
+        outcome: 'couldnt_run',
+        evidence: 'No ICE candidates',
+        detail: 'No ICE candidates were collected (timeout, STUN blocked, or WebRTC disabled). Leak status was not measured.',
       }),
     )
   } else {
+    const iceEvidence = hostIps.length
+      ? hostIps.join(', ')
+      : iceList.slice(0, 4).join(' · ')
     findings.push(
-      f({
-        id: 'wallet_injection',
-        category: 'Wallet and App Integrity',
-        title: 'Injected Web3 wallet providers',
-        severity: 'info',
-        status: 'clear',
-        detail: 'No browser-injected Ethereum/Solana wallet providers were detected in this session.',
+      row({
+        id: 'webrtc_ip_leak',
+        category: 'Data Leaks and Exfiltration Risks',
+        title: 'WebRTC local IP leak',
+        outcome: webrtc.leak ? 'failed' : 'passed',
+        evidence: iceEvidence,
+        detail: webrtc.leak
+          ? `Private LAN ICE candidates were observed (${hostIps.join(', ')}). VPN split-tunneling may be leaking the real LAN IP.`
+          : `ICE candidates collected; no private LAN host IPs. Hosts: ${hostIps.join(', ') || 'none'}.`,
+        severity: webrtc.leak ? 'high' : 'info',
+        status: webrtc.leak ? 'threat' : 'clear',
       }),
     )
   }
 
+  const publicIp = probes.publicIp || probes.ipGeo?.ip
+  const geo = probes.ipGeo || {}
+  if (!publicIp) {
+    findings.push(
+      row({
+        id: 'public_ip_geo',
+        category: 'Data Leaks and Exfiltration Risks',
+        title: 'Public IP & network location',
+        outcome: 'couldnt_run',
+        evidence: 'no public IP',
+        detail: 'The page could not resolve a public IP (ipify lookup failed or was blocked).',
+      }),
+    )
+  } else {
+    const place = [geo.city, geo.region, geo.country].filter(Boolean).join(', ')
+    const evidence = [publicIp, place, geo.isp].filter(Boolean).join(' · ')
+    findings.push(
+      row({
+        id: 'public_ip_geo',
+        category: 'Data Leaks and Exfiltration Risks',
+        title: 'Public IP & network location',
+        outcome: 'passed',
+        evidence,
+        detail: `Device reported public IP ${publicIp}${place ? ` · ${place}` : ''}${geo.isp ? ` · ${geo.isp}` : ''}.`,
+      }),
+    )
+  }
+
+  const wallets = probes.wallets || {}
+  const names = wallets.providerNames || []
+  const walletEvidence =
+    names.length > 0 ? names.join(', ') : 'none'
+  findings.push(
+    row({
+      id: 'wallet_injection',
+      category: 'Wallet and App Integrity',
+      title: 'Injected Web3 wallet providers',
+      outcome: 'passed',
+      evidence: walletEvidence,
+      detail: names.length
+        ? `Live wallet injection found: ${names.join(', ')} (${wallets.providerCount || names.length} provider(s)).`
+        : 'No browser-injected Ethereum/Solana wallet providers were detected.',
+    }),
+  )
+
   if ((wallets.providerCount || 0) > 2) {
     findings.push(
-      f({
+      row({
         id: 'multiple_wallets',
         category: 'Wallet and App Integrity',
         title: 'Multiple concurrent wallet injectors',
+        outcome: 'failed',
+        evidence: `${wallets.providerCount} providers · ${walletEvidence}`,
+        detail: `${wallets.providerCount} wallet providers are injected. Extra injectors increase phishing / approval confusion risk.`,
         severity: 'medium',
         status: 'warning',
-        detail: `${wallets.providerCount} wallet providers are injected. Extra injectors increase phishing / approval confusion risk. Keep only wallets you actively use.`,
       }),
     )
   }
 
   const automation = probes.automation || {}
+  const autoBad = Boolean(automation.webdriver || automation.headlessHints)
   findings.push(
-    f({
+    row({
       id: 'automation_bots',
       category: 'Bots',
       title: 'Automation / headless client signals',
-      severity: automation.webdriver || automation.headlessHints ? 'high' : 'info',
-      status: automation.webdriver || automation.headlessHints ? 'warning' : 'clear',
-      detail:
-        automation.webdriver || automation.headlessHints
-          ? 'navigator.webdriver or headless UA signals are present. This session may be automated.'
-          : 'No classic webdriver/headless automation fingerprints were detected.',
+      outcome: autoBad ? 'failed' : 'passed',
+      evidence: `webdriver=${Boolean(automation.webdriver)} · headlessHints=${Boolean(automation.headlessHints)}`,
+      detail: autoBad
+        ? 'navigator.webdriver or headless UA signals are present. This session may be automated.'
+        : 'No classic webdriver/headless automation fingerprints were detected.',
+      severity: autoBad ? 'high' : 'info',
+      status: autoBad ? 'threat' : 'clear',
     }),
   )
 
   const storage = probes.storage || {}
   findings.push(
-    f({
+    row({
       id: 'storage_seed_leak',
       category: 'Credential & Seed Phrase Leakage',
       title: 'Seed-like strings in browser storage',
-      severity: storage.seedLikeHits > 0 ? 'critical' : 'info',
-      status: storage.seedLikeHits > 0 ? 'threat' : 'clear',
+      outcome: (storage.seedLikeHits || 0) > 0 ? 'failed' : 'passed',
+      evidence: `seedLikeHits=${storage.seedLikeHits || 0}`,
       detail:
-        storage.seedLikeHits > 0
-          ? `Found ${storage.seedLikeHits} seed-phrase-like pattern(s) in local/session storage accessible to this origin. Remove plaintext recovery words from browser storage immediately.`
+        (storage.seedLikeHits || 0) > 0
+          ? `Found ${storage.seedLikeHits} seed-phrase-like pattern(s) in local/session storage for this origin.`
           : 'No 12/24-word seed-like patterns were found in this origin’s local/session storage.',
+      severity: (storage.seedLikeHits || 0) > 0 ? 'critical' : 'info',
+      status: (storage.seedLikeHits || 0) > 0 ? 'threat' : 'clear',
     }),
   )
 
   findings.push(
-    f({
+    row({
       id: 'storage_private_keys',
       category: 'Credential & Seed Phrase Leakage',
       title: 'Private-key-like strings in browser storage',
-      severity: storage.privateKeyLikeHits > 0 ? 'critical' : 'info',
-      status: storage.privateKeyLikeHits > 0 ? 'threat' : 'clear',
+      outcome: (storage.privateKeyLikeHits || 0) > 0 ? 'failed' : 'passed',
+      evidence: `privateKeyLikeHits=${storage.privateKeyLikeHits || 0}`,
       detail:
-        storage.privateKeyLikeHits > 0
-          ? `Found ${storage.privateKeyLikeHits} private-key-like value(s) in browser storage for this origin. Rotate affected keys.`
+        (storage.privateKeyLikeHits || 0) > 0
+          ? `Found ${storage.privateKeyLikeHits} private-key-like value(s) in browser storage for this origin.`
           : 'No private-key-like hex/WIF patterns were found in this origin’s storage.',
+      severity: (storage.privateKeyLikeHits || 0) > 0 ? 'critical' : 'info',
+      status: (storage.privateKeyLikeHits || 0) > 0 ? 'threat' : 'clear',
     }),
   )
 
+  const apiHits = storage.apiKeyLikeHits || []
   findings.push(
-    f({
+    row({
       id: 'storage_api_keys',
       category: 'Wallet and App Integrity',
       title: 'API key-like secrets in browser storage',
-      severity: (storage.apiKeyLikeHits || []).length ? 'high' : 'info',
-      status: (storage.apiKeyLikeHits || []).length ? 'threat' : 'clear',
-      detail:
-        (storage.apiKeyLikeHits || []).length
-          ? `Possible API key material in storage (${storage.apiKeyLikeHits.join(', ')}). Revoke and move secrets server-side.`
-          : 'No common API key prefixes were detected in this origin’s storage.',
+      outcome: apiHits.length ? 'failed' : 'passed',
+      evidence: apiHits.length ? apiHits.join(', ') : 'none',
+      detail: apiHits.length
+        ? `Possible API key material in storage (${apiHits.join(', ')}).`
+        : 'No common API key prefixes were detected in this origin’s storage.',
+      severity: apiHits.length ? 'high' : 'info',
+      status: apiHits.length ? 'threat' : 'clear',
     }),
   )
 
   const clipboard = probes.clipboard || {}
-  if (clipboard.lookedLikeSeed || clipboard.lookedLikePrivateKey) {
+  const clipDenied =
+    clipboard.sampleKind === 'denied' ||
+    clipboard.sampleKind === 'denied-or-blocked' ||
+    clipboard.sampleKind === 'not-requested' ||
+    clipboard.permission === 'denied'
+  const clipUnsupported = clipboard.sampleKind === 'unsupported'
+  const clipPerm = clipboard.permission || 'unknown'
+
+  if (clipDenied || clipUnsupported || !clipboard.readAttempted) {
+    const why = clipUnsupported
+      ? 'Clipboard API unsupported'
+      : clipDenied
+        ? `permission=${clipPerm === 'denied' ? 'denied' : clipPerm} · ${clipboard.error || 'not readable'}`
+        : 'clipboard not requested'
     findings.push(
-      f({
+      row({
+        id: 'clipboard_status',
+        category: 'Clipboard Sniffers',
+        title: 'Clipboard exposure check',
+        outcome: 'couldnt_run',
+        evidence: why,
+        detail:
+          clipUnsupported
+            ? 'Clipboard API unsupported in this browser — clipper/seed check skipped.'
+            : clipDenied
+              ? 'Clipboard access was denied. This check did not run; no clipboard result was recorded.'
+              : 'Clipboard was not read. This check did not run.',
+      }),
+    )
+  } else if (clipboard.lookedLikeSeed || clipboard.lookedLikePrivateKey) {
+    findings.push(
+      row({
         id: 'clipboard_seed',
         category: 'Clipboard Sniffers',
         title: 'Seed/key material present on clipboard',
-        severity: 'critical',
-        status: 'threat',
+        outcome: 'failed',
+        evidence: `permission=${clipPerm} · ${clipboard.sampleKind || 'seed-like'}${clipboard.length != null ? ` · ${clipboard.length} chars` : ''}`,
         detail:
           'Clipboard contents matched seed/key-like patterns during the scan gesture. Clear the clipboard and never keep recovery phrases copied.',
+        severity: 'critical',
+        status: 'threat',
       }),
     )
   } else if (clipboard.lookedLikeApiKey) {
     findings.push(
-      f({
+      row({
         id: 'clipboard_api_key',
         category: 'Clipboard Sniffers',
         title: 'API key-like material on clipboard',
-        severity: 'high',
-        status: 'threat',
+        outcome: 'failed',
+        evidence: `permission=${clipPerm} · ${clipboard.sampleKind || 'api-key-like'}${clipboard.length != null ? ` · ${clipboard.length} chars` : ''}`,
         detail:
           'Clipboard text matched API key prefixes (Stripe/AWS/GitHub/Slack style). Clear clipboard and rotate the key if it was real.',
+        severity: 'high',
+        status: 'threat',
       }),
     )
   } else if (clipboard.lookedLikeAddress) {
     findings.push(
-      f({
+      row({
         id: 'clipboard_address',
         category: 'Transaction Tampering (Clipper Malware)',
         title: 'Crypto address on clipboard',
+        outcome: 'failed',
+        evidence: `permission=${clipPerm} · crypto-address${clipboard.length != null ? ` · ${clipboard.length} chars` : ''}`,
+        detail:
+          'A crypto address was present on the clipboard. Verify the full address on-screen before pasting — clippers swap destinations silently.',
         severity: 'medium',
         status: 'warning',
-        detail:
-          'A crypto address was present on the clipboard. Always verify the full address on-screen before pasting — clippers swap destinations silently.',
       }),
     )
   } else {
     findings.push(
-      f({
+      row({
         id: 'clipboard_status',
         category: 'Clipboard Sniffers',
         title: 'Clipboard exposure check',
-        severity: 'info',
-        status: clipboard.readAttempted ? 'clear' : 'warning',
+        outcome: 'passed',
+        evidence: `permission=${clipPerm} · ${clipboard.sampleKind || 'ok'}${clipboard.length != null ? ` · ${clipboard.length} chars` : ''}`,
         detail:
-          clipboard.sampleKind === 'denied-or-blocked'
-            ? `Clipboard could not be read (${clipboard.error || 'permission denied/blocked'}). Grant clipboard access on Fetch for a live clipper check.`
-            : clipboard.sampleKind === 'unsupported'
-              ? 'Clipboard API unsupported in this browser — clipper/seed check skipped.'
-              : clipboard.sampleKind === 'empty'
-                ? 'Clipboard read succeeded — clipboard was empty (no seed/address/API key patterns).'
-                : `Clipboard read succeeded (${clipboard.sampleKind || 'ok'}${clipboard.length != null ? `, ${clipboard.length} chars` : ''}) — no seed/address/API key patterns.`,
+          clipboard.sampleKind === 'empty'
+            ? 'Clipboard read succeeded — clipboard was empty (no seed/address/API key patterns).'
+            : `Clipboard read succeeded (${clipboard.sampleKind || 'ok'}) — no seed/address/API key patterns.`,
       }),
     )
   }
 
   const perms = probes.permissions || {}
-  const riskyPerms = Object.entries(perms).filter(([, state]) => state === 'granted')
+  const permEvidence = permLine(perms)
+  const permQueryable = permEvidence !== 'unavailable' && !Object.values(perms).every((v) => v === 'unsupported')
   findings.push(
-    f({
+    row({
       id: 'permission_surface',
       category: 'Vulnerabilities and System Configuration',
       title: 'Sensitive browser permissions',
-      severity: riskyPerms.some(([k]) => k === 'camera' || k === 'microphone') ? 'medium' : 'info',
-      status: riskyPerms.some(([k]) => k === 'camera' || k === 'microphone') ? 'warning' : 'clear',
-      detail:
-        riskyPerms.length > 0
-          ? `Granted permissions: ${riskyPerms.map(([k, v]) => `${k}=${v}`).join(', ')}. Review site permissions for camera/mic/clipboard.`
-          : `Permission states: ${Object.entries(perms)
-              .map(([k, v]) => `${k}=${v}`)
-              .join(', ') || 'unavailable'}.`,
+      outcome: permQueryable ? 'passed' : 'couldnt_run',
+      evidence: permEvidence,
+      detail: permQueryable
+        ? `Permission states: ${permEvidence}.`
+        : 'Permissions API unavailable — camera/mic/clipboard states were not queried.',
     }),
   )
 
-  const cores = probes.hardwareConcurrency || 0
+  const cores = probes.hardwareConcurrency
   const mem = probes.deviceMemory
-  findings.push(
-    f({
-      id: 'cryptojack_surface',
-      category: 'Unauthorized Cryptojacking',
-      title: 'Client compute surface (CPU / memory)',
-      severity: cores >= 8 ? 'low' : 'info',
-      status: 'clear',
-      detail: `Hardware concurrency ${cores || 'unknown'}${mem ? ` · deviceMemory ~${mem}GB` : ''}. High-core devices are attractive cryptojacking targets — watch for unexpected battery/CPU drain.`,
-    }),
-  )
-
-  if (probes.battery) {
+  if (cores || mem) {
     findings.push(
-      f({
+      row({
+        id: 'cryptojack_surface',
+        category: 'Unauthorized Cryptojacking',
+        title: 'Client CPU / memory',
+        outcome: 'passed',
+        evidence: [cores ? `${cores} cores` : null, mem ? `~${mem}GB` : null].filter(Boolean).join(' · '),
+        detail: `Hardware concurrency ${cores || 'unknown'}${mem ? ` · deviceMemory ~${mem}GB` : ''}.`,
+      }),
+    )
+  } else {
+    findings.push(
+      row({
+        id: 'cryptojack_surface',
+        category: 'Unauthorized Cryptojacking',
+        title: 'Client CPU / memory',
+        outcome: 'couldnt_run',
+        evidence: 'hardwareConcurrency and deviceMemory unavailable',
+        detail: 'This browser did not expose CPU/memory telemetry.',
+      }),
+    )
+  }
+
+  if (!probes.battery) {
+    findings.push(
+      row({
         id: 'battery_drain',
         category: 'Unauthorized Cryptojacking',
         title: 'Battery drain signal',
-        severity: probes.battery.drainingFastHint ? 'medium' : 'info',
-        status: probes.battery.drainingFastHint ? 'warning' : 'clear',
-        detail: probes.battery.drainingFastHint
-          ? `Battery at ${probes.battery.level}% and discharging quickly while not charging — investigate background miners/apps.`
-          : `Battery ${probes.battery.level}% · charging=${probes.battery.charging}.`,
+        outcome: 'couldnt_run',
+        evidence: 'Battery API unavailable',
+        detail: 'This browser did not expose battery status, so drain could not be measured.',
+      }),
+    )
+  } else {
+    const b = probes.battery
+    findings.push(
+      row({
+        id: 'battery_drain',
+        category: 'Unauthorized Cryptojacking',
+        title: 'Battery drain signal',
+        outcome: b.drainingFastHint ? 'failed' : 'passed',
+        evidence: `level=${b.level}% · charging=${b.charging}`,
+        detail: b.drainingFastHint
+          ? `Battery at ${b.level}% and discharging quickly while not charging.`
+          : `Battery ${b.level}% · charging=${b.charging}.`,
+        severity: b.drainingFastHint ? 'medium' : 'info',
+        status: b.drainingFastHint ? 'warning' : 'clear',
       }),
     )
   }
 
   findings.push(
-    f({
-      id: 'tls_crypto_posture',
-      category: 'Cryptographic Scan',
-      title: 'TLS / transport posture',
-      severity: probes.secureContext ? 'info' : 'high',
-      status: probes.secureContext ? 'clear' : 'warning',
-      detail: probes.secureContext
-        ? 'Browser reports a secure context; modern TLS is expected for this origin.'
-        : 'Insecure context — do not enter wallet secrets on this connection.',
-    }),
-  )
-
-  findings.push(
-    f({
+    row({
       id: 'profile_binding',
       category: 'Data Leaks and Exfiltration Risks',
       title: 'Invite profile binding',
-      severity: 'info',
-      status: 'clear',
+      outcome: 'passed',
+      evidence: `${email} · ${country} · tz=${probes.timezone || 'unknown'}`,
       detail: `Scan bound to ${email} · invited country ${country} · device timezone ${probes.timezone || 'unknown'}.`,
+      adminOnly: true,
     }),
   )
 

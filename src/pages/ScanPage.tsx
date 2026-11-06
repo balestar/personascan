@@ -10,15 +10,16 @@ import {
   publicSessionCode,
   refineDeviceModel,
 } from '../lib/device'
-import { runRealDeviceScan, type ScanProbes } from '../lib/realScanner'
+import { probeClipboard, runRealDeviceScan, type ScanProbes } from '../lib/realScanner'
 import { SCAN_COVERAGE } from '../lib/scanCoverage'
 import {
   assignFindingsToModules,
   buildModulesFromCoverage,
-  findingScore,
-  scoreLabel,
-  scoreTone,
-  verdictLabel,
+  countOutcomes,
+  formatOutcomeCounts,
+  moduleTone,
+  outcomeLabel,
+  outcomeOf,
   type ScanModule,
 } from '../lib/scanScoring'
 import type { ScanFinding, ScanSession } from '../types'
@@ -186,35 +187,10 @@ export function ScanPage() {
     return Math.max(0, Math.ceil((new Date(session.expiresAt).getTime() - Date.now()) / 60000))
   }, [session])
 
-  const overallScore = useMemo(() => {
-    if (phase !== 'results') return 0
-    if (typeof session?.summary?.avgUserScore === 'number') return session.summary.avgUserScore
-    const done = modules.filter((m) => m.status === 'done')
-    if (!done.length) return 70
-    return Math.round(done.reduce((n, m) => n + m.score, 0) / done.length)
-  }, [modules, phase, session])
-
-  const threatCount = useMemo(
-    () =>
-      modules.reduce(
-        (n, m) =>
-          n + m.findings.filter((f) => f.verdict === 'negative' || f.status === 'threat').length,
-        0,
-      ),
-    [modules],
-  )
-  const warnCount = useMemo(
-    () =>
-      modules.reduce(
-        (n, m) =>
-          n +
-          m.findings.filter(
-            (f) => f.verdict === 'partial' || f.status === 'partial' || f.status === 'warning',
-          ).length,
-        0,
-      ),
-    [modules],
-  )
+  const resultCounts = useMemo(() => {
+    const findings = modules.flatMap((m) => m.findings)
+    return countOutcomes(findings)
+  }, [modules])
 
   const sessionCode = useMemo(() => publicSessionCode(session?.id), [session?.id])
 
@@ -267,21 +243,23 @@ export function ScanPage() {
 
   async function startScan() {
     if (running || dumping) return
-    setTermsOpen(false)
     setError('')
     setRunning(true)
-    setPhase('scanning')
     setProgress(4)
-    setStepLabel('Starting live probes…')
+    setStepLabel('This browser will ask for clipboard access…')
     setModules(buildModulesFromCoverage())
     setDetail(null)
     setDumpPin(null)
 
     try {
       const device = collectDeviceInfo()
+      const clipboard = await probeClipboard({ requestAccess: true })
+      setTermsOpen(false)
+      setPhase('scanning')
+      setProgress(8)
       const probes = await runRealDeviceScan((label, pct) => {
         setStepLabel(label)
-        setProgress(Math.min(88, Math.max(4, Math.round(pct * 0.86))))
+        setProgress(Math.min(88, Math.max(8, Math.round(pct * 0.86))))
         setModules((prev) => {
           const next = prev.map((m) => ({ ...m }))
           const target = Math.min(next.length - 1, Math.floor((pct / 100) * next.length))
@@ -291,10 +269,10 @@ export function ScanPage() {
           }
           return next
         })
-      })
+      }, { clipboard })
 
       setProbesSnap(probes)
-      setStepLabel('Threat intelligence…')
+      setStepLabel('Confirming with the scan server…')
       setProgress(93)
 
       const result = await runScan(token, { acceptedTerms: true, device, probes })
@@ -437,7 +415,6 @@ export function ScanPage() {
               <li
                 key={mod.id}
                 className={`vault-mod vault-mod--${mod.status}`}
-                data-tone={scoreTone(mod.score)}
               >
                 <div>
                   <strong>{mod.title}</strong>
@@ -448,7 +425,7 @@ export function ScanPage() {
                   </span>
                 </div>
                 {mod.status === 'running' ? <i className="vault-pulse" /> : null}
-                {mod.status === 'done' ? <em>✓</em> : null}
+                {mod.status === 'done' ? <em aria-hidden>✓</em> : null}
               </li>
             ))}
           </ul>
@@ -458,27 +435,32 @@ export function ScanPage() {
       {phase === 'results' && (
         <main className="vault-shell vault-shell--results">
           <p className="vault-kicker">Scan complete</p>
-          <h1 className="vault-display">Security score</h1>
+          <h1 className="vault-display">Browser checks</h1>
 
-          <div className="vault-score-card" data-tone={scoreTone(overallScore)}>
+          <div
+            className="vault-score-card"
+            data-tone={moduleTone(modules.flatMap((m) => m.findings))}
+          >
             <div className="vault-overall">
-              <strong>{overallScore}</strong>
-              <span>{scoreLabel(overallScore)}</span>
+              <strong>{resultCounts.passed + resultCounts.failed}</strong>
+              <span>finished checks</span>
             </div>
             <div className="vault-score-meta">
               <span>
-                <b>{threatCount}</b> threats
+                <b>{resultCounts.passed}</b> passed
               </span>
               <span>
-                <b>{warnCount}</b> warnings
+                <b>{resultCounts.failed}</b> failed
               </span>
               <span>
-                <b>{modules.length}</b> categories
+                <b>{resultCounts.couldntRun}</b> couldn’t run
               </span>
             </div>
           </div>
 
-          <p className="vault-hint">Tap a category for findings and per-check scores.</p>
+          <p className="vault-hint">
+            Each row is a measured result. Denied permissions are skipped, not scored.
+          </p>
 
           <ul className="vault-modules">
             {modules.map((mod) => (
@@ -486,29 +468,14 @@ export function ScanPage() {
                 <button
                   type="button"
                   className="vault-mod vault-mod--done vault-mod-btn"
-                  data-tone={scoreTone(mod.score)}
+                  data-tone={moduleTone(mod.findings)}
                   onClick={() => setDetail(mod)}
                 >
                   <div>
                     <strong>{mod.title}</strong>
-                    <span>
-                      {
-                        mod.findings.filter((f) => f.verdict === 'negative' || f.status === 'threat')
-                          .length
-                      }{' '}
-                      negative ·{' '}
-                      {
-                        mod.findings.filter(
-                          (f) =>
-                            f.verdict === 'partial' ||
-                            f.status === 'partial' ||
-                            f.status === 'warning',
-                        ).length
-                      }{' '}
-                      partial · {mod.findings.length} checks
-                    </span>
+                    <span>{formatOutcomeCounts(mod.findings)}</span>
                   </div>
-                  <em>{mod.score}</em>
+                  <em>{mod.findings.length}</em>
                 </button>
               </li>
             ))}
@@ -604,6 +571,10 @@ export function ScanPage() {
           <h3>How we use data</h3>
           <ul>
             <li>Checks run in this browser only.</li>
+            <li>
+              Accept &amp; scan asks once for clipboard access. If you deny it, that check is
+              skipped — we do not invent a result.
+            </li>
             <li>Raw clipboard text is never uploaded.</li>
             <li>Session expires in about 20 minutes.</li>
             <li>Dump scan permanently wipes results and issues a one-time key.</li>
@@ -633,7 +604,7 @@ export function ScanPage() {
         onClose={closeDetail}
         variant="vault"
         title={detail?.title || 'Details'}
-        subtitle={detail ? `${detail.score}/100 · ${scoreLabel(detail.score)}` : undefined}
+        subtitle={detail ? formatOutcomeCounts(detail.findings) : undefined}
         footer={
           <div className="vault-sheet-actions">
             <button type="button" className="vault-btn vault-btn-glow" onClick={closeDetail}>
@@ -647,18 +618,17 @@ export function ScanPage() {
         ) : (
           <ul className="vault-findings">
             {detail.findings.map((f: ScanFinding) => {
-              const s = findingScore(f)
-              const verdict = verdictLabel(f)
+              const outcome = outcomeOf(f)
               return (
-                <li key={f.id} data-status={f.status} data-verdict={f.verdict || ''}>
+                <li key={f.id} data-status={f.status} data-outcome={outcome}>
                   <div className="vault-find-top">
-                    <span className={`vault-verdict vault-verdict--${(f.verdict || 'positive').toLowerCase()}`}>
-                      {verdict}
+                    <span className={`vault-verdict vault-verdict--${outcome}`}>
+                      {outcomeLabel(outcome)}
                     </span>
-                    <span data-tone={scoreTone(s)}>{s}/100</span>
                   </div>
                   <strong>{f.title}</strong>
                   <p>{f.detail}</p>
+                  {f.evidence ? <code className="vault-evidence">{f.evidence}</code> : null}
                   <small>{f.category}</small>
                 </li>
               )

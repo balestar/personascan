@@ -1,8 +1,33 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
-import type { DualSideResult, ScanFinding, ScanSession } from '../types'
+import { outcomeLabel, outcomeOf } from '../lib/scanScoring'
+import type { DualSideResult, FindingOutcome, ScanFinding, ScanSession } from '../types'
 import { Modal } from './Modal'
 import { StreetViewPanel } from './StreetViewPanel'
+
+const FEED_NAMES: Record<string, string> = {
+  anyapi: 'AnyAPI',
+  anyapi_ip: 'AnyAPI IP geolocation',
+  anyapi_email: 'AnyAPI email validation',
+  anyapi_phone: 'AnyAPI phone validation',
+  anyapi_url: 'AnyAPI URL scrape',
+  urlscan: 'urlscan.io',
+  cloudmersive: 'Cloudmersive',
+  phishtank: 'PhishTank',
+  nvd: 'NVD CVE',
+  cve_nvd: 'NVD CVE',
+  google_safe_browsing: 'Google Safe Browsing',
+  virustotal: 'VirusTotal',
+  scamsniffer: 'ScamSniffer',
+  blockaid: 'Blockaid',
+  snyk: 'Snyk',
+  mobsf: 'MobSF',
+  yara: 'YARA',
+  clamav: 'ClamAV',
+  approov: 'Approov',
+  appsealing: 'AppSealing',
+  frida_detection: 'Frida heuristics',
+}
 
 type Props = {
   open: boolean
@@ -28,47 +53,63 @@ function statusLabel(status: ScanSession['status']) {
   }
 }
 
+function sideOutcome(side?: DualSideResult): FindingOutcome {
+  if (!side || side.skipped || side.passed == null) return 'couldnt_run'
+  return side.passed ? 'passed' : 'failed'
+}
+
 function sideLabel(side?: DualSideResult) {
-  if (!side) return '—'
-  if (side.failed || side.skipped) return side.skipped ? 'Skipped / failed' : 'Failed'
-  if (side.passed === true) return 'True / clear'
-  if (side.passed === false) return 'False / risk'
-  return 'Unknown'
+  return outcomeLabel(sideOutcome(side))
 }
 
 function FindingDual({ finding, open, onToggle }: { finding: ScanFinding; open: boolean; onToggle: () => void }) {
+  const outcome = outcomeOf(finding)
+  const independent =
+    finding.apiResult?.source === 'request_ip' || finding.apiResult?.source === 'request_ua'
+  const pill = independent ? sideOutcome(finding.apiResult) : outcome
   return (
-    <li data-status={finding.status} data-verdict={finding.verdict || ''} className={open ? 'is-open' : ''}>
+    <li data-status={finding.status} data-outcome={pill} className={open ? 'is-open' : ''}>
       <button type="button" className="finding-toggle" onClick={onToggle}>
         <div className="finding-top">
           <span className="finding-cat">{finding.category}</span>
-          <span className={`dual-pill dual-pill--${finding.verdict || 'partial'}`}>
-            {(finding.verdict || 'partial').toUpperCase()}
-            {typeof finding.userScore === 'number' ? ` · ${finding.userScore}` : ''}
+          <span className={`dual-pill dual-pill--${pill}`}>
+            {independent ? `${outcomeLabel(pill)} (IP/UA)` : outcomeLabel(pill)}
           </span>
         </div>
         <strong>{finding.title}</strong>
         <p className="finding-preview">{finding.adminDetail || finding.detail}</p>
+        {finding.evidence ? <code className="vault-evidence">{finding.evidence}</code> : null}
       </button>
       {open && (
         <div className="finding-body">
           <div className="dual-grid">
             <div className="dual-card">
-              <span>Device result</span>
+              <span>Device said</span>
               <strong>{sideLabel(finding.deviceResult)}</strong>
-              <p>{finding.deviceResult?.detail || 'No device result stored'}</p>
-              {typeof finding.deviceResult?.ms === 'number' ? (
-                <small>{finding.deviceResult.ms} ms</small>
+              {finding.deviceResult?.value ? (
+                <code className="vault-evidence">{finding.deviceResult.value}</code>
               ) : null}
+              <p>{finding.deviceResult?.detail || 'No device result stored'}</p>
             </div>
             <div className="dual-card">
-              <span>API / server result</span>
+              <span>Server saw</span>
               <strong>{sideLabel(finding.apiResult)}</strong>
-              <p>{finding.apiResult?.detail || 'No API/server result stored'}</p>
-              {typeof finding.apiResult?.ms === 'number' ? (
+              {finding.apiResult?.value ? (
+                <code className="vault-evidence">{finding.apiResult.value}</code>
+              ) : null}
+              <p>
+                {independent
+                  ? finding.apiResult?.detail || 'No server observation stored'
+                  : finding.apiResult?.detail ||
+                    'Not independently observable from the request. Device measurement only.'}
+              </p>
+              {finding.apiResult?.source ? (
                 <small>
-                  {finding.apiResult.ms} ms
-                  {finding.apiResult.source ? ` · ${finding.apiResult.source}` : ''}
+                  {finding.apiResult.source === 'request_ip'
+                    ? 'Compared to CF-Connecting-IP / request IP'
+                    : finding.apiResult.source === 'request_ua'
+                      ? 'Compared to request User-Agent'
+                      : finding.apiResult.source}
                 </small>
               ) : null}
             </div>
@@ -121,7 +162,28 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
   const view = live || session
   if (!view) return null
 
-  const findings = view.findings || []
+  const findings = (view.findings || []).filter(
+    (f) => !String(f.id || '').startsWith('intel_') && f.category !== 'Optional threat intel',
+  )
+  const intel = (view.threatIntel || {}) as {
+    ranAt?: string
+    results?: Array<{
+      provider?: string
+      ok?: boolean
+      skipped?: boolean
+      reason?: string
+      error?: string
+      checkedAt?: string
+      data?: {
+        malicious?: boolean
+        evidence?: string
+        ips?: Array<{ ip?: string; malicious?: number; suspicious?: number; harmless?: number }>
+        domains?: Array<{ domain?: string; malicious?: number; suspicious?: number; harmless?: number }>
+        urls?: Array<{ url?: string; malicious?: number; unknown?: boolean }>
+      }
+    }>
+  }
+  const intelResults = intel.results || []
 
   return (
     <Modal
@@ -231,7 +293,8 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
             ) : (
               <p className="admin-empty">
                 {[view.geo.city, view.geo.region, view.geo.country].filter(Boolean).join(', ') || 'Location on file'}
-                {view.geo.ip ? ` · ${view.geo.ip}` : ''}
+                {view.geo.ip ? ` · device IP ${view.geo.ip}` : ''}
+                {view.geo.observedIp ? ` · server saw ${view.geo.observedIp}` : ''}
                 {view.geo.isp ? ` · ${view.geo.isp}` : ''} · {view.geo.lat.toFixed(4)}, {view.geo.lon.toFixed(4)}
               </p>
             )}
@@ -240,18 +303,24 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
 
         {view.summary && (
           <div className="summary-strip">
-            <span>{view.summary.avgUserScore ?? '—'} user score</span>
-            <span>{view.summary.positive ?? view.summary.clear} positive</span>
-            <span>{view.summary.partial ?? view.summary.warning} partial</span>
-            <span>{view.summary.negative ?? view.summary.threat} negative</span>
-            <span>{view.summary.total} checks</span>
+            <span>{view.summary.passed ?? view.summary.positive ?? view.summary.clear} passed</span>
+            <span>{view.summary.failed ?? view.summary.negative ?? view.summary.threat} failed</span>
+            <span>{view.summary.couldntRun ?? view.summary.partial ?? 0} couldn’t run</span>
+            <span>
+              {view.summary.scored ??
+                (view.summary.passed ?? 0) + (view.summary.failed ?? 0)}{' '}
+              scored
+            </span>
           </div>
         )}
 
         {findings.length > 0 ? (
           <div className="detail-block">
-            <h3>Dual-verified findings</h3>
-            <p className="admin-empty">Tap a check to expand device + API/server results.</p>
+            <h3>Device vs server</h3>
+            <p className="admin-empty">
+              Dual-verify is request IP and User-Agent: device said X, server saw X. Other checks
+              are device measurements the server cannot independently re-run.
+            </p>
             <ul className="finding-list">
               {findings.map((finding) => (
                 <FindingDual
@@ -276,6 +345,66 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
                     : 'No findings recorded for this session.'}
           </p>
         )}
+
+        <div className="detail-block">
+          <h3>Optional threat intel</h3>
+          {intelResults.length ? (
+            <>
+              <p className="admin-empty">
+                A missing key is not a malware pass. Finished checks show the feed name and time.
+              </p>
+              <ul className="intel-feed-list">
+                {intelResults.map((r) => {
+                  const feed = FEED_NAMES[r.provider || ''] || r.provider || 'feed'
+                  const when = r.checkedAt || intel.ranAt
+                  const skipped = Boolean(r.skipped)
+                  const failed = !skipped && r.ok === false
+                  const evidence =
+                    r.data?.evidence ||
+                    [
+                      ...(r.data?.ips || []).map(
+                        (row) =>
+                          `${row.ip} malicious=${row.malicious ?? 0} suspicious=${row.suspicious ?? 0} harmless=${row.harmless ?? 0}`,
+                      ),
+                      ...(r.data?.domains || []).map(
+                        (row) =>
+                          `${row.domain} malicious=${row.malicious ?? 0} suspicious=${row.suspicious ?? 0}`,
+                      ),
+                      ...(r.data?.urls || []).map((row) =>
+                        row.unknown ? `${row.url} not in corpus` : `${row.url} malicious=${row.malicious ?? 0}`,
+                      ),
+                    ].join(' · ')
+                  const outcome = skipped || failed ? 'couldnt_run' : r.data?.malicious ? 'failed' : 'passed'
+                  return (
+                    <li key={r.provider || feed} data-outcome={outcome}>
+                      <div className="finding-top">
+                        <strong>{feed}</strong>
+                        <span className={`dual-pill dual-pill--${outcome}`}>
+                          {outcome === 'passed' ? 'Passed' : outcome === 'failed' ? 'Failed' : 'Couldn’t run'}
+                        </span>
+                      </div>
+                      {skipped ? (
+                        <span>Not configured — not checked{r.reason ? ` (${r.reason})` : ''}</span>
+                      ) : failed ? (
+                        <span>Couldn’t run{r.error ? ` · ${r.error}` : ''}</span>
+                      ) : (
+                        <>
+                          <span>
+                            Checked against {feed}
+                            {when ? ` · ${when}` : ''}
+                          </span>
+                          {evidence ? <code className="vault-evidence">{evidence}</code> : null}
+                        </>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : (
+            <p className="admin-empty">No threat-intel run recorded for this session.</p>
+          )}
+        </div>
 
         <div className="detail-block">
           <h3>Session link</h3>

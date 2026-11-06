@@ -1,4 +1,4 @@
-import type { ScanFinding } from '../types'
+import type { FindingOutcome, ScanFinding } from '../types'
 import { isUserFacingFinding, SCAN_COVERAGE } from './scanCoverage'
 
 export type ScanModule = {
@@ -43,10 +43,56 @@ const CATEGORY_HINTS: Record<string, string[]> = {
   ],
 }
 
-/** Module score from dual-verify userScores (positive baseline 70). */
+export function outcomeOf(finding: ScanFinding): FindingOutcome {
+  if (finding.outcome === 'passed' || finding.outcome === 'failed' || finding.outcome === 'couldnt_run') {
+    return finding.outcome
+  }
+  if (finding.verdict === 'negative' || finding.status === 'threat') return 'failed'
+  if (finding.verdict === 'partial' || finding.status === 'partial' || finding.status === 'warning') {
+    return 'failed'
+  }
+  return 'passed'
+}
+
+export function outcomeLabel(outcome: FindingOutcome): string {
+  if (outcome === 'passed') return 'Passed'
+  if (outcome === 'failed') return 'Failed'
+  return 'Couldn’t run'
+}
+
+export function countOutcomes(findings: ScanFinding[]) {
+  const counts = { passed: 0, failed: 0, couldntRun: 0 }
+  for (const f of findings) {
+    const o = outcomeOf(f)
+    if (o === 'passed') counts.passed += 1
+    else if (o === 'failed') counts.failed += 1
+    else counts.couldntRun += 1
+  }
+  return counts
+}
+
+export function moduleTone(findings: ScanFinding[]): 'ok' | 'warn' | 'bad' {
+  const c = countOutcomes(findings)
+  if (c.failed > 0) return 'bad'
+  if (c.couldntRun > 0 && c.passed === 0) return 'warn'
+  return 'ok'
+}
+
+export function formatOutcomeCounts(findings: ScanFinding[]): string {
+  const c = countOutcomes(findings)
+  const parts = [
+    `${c.passed} passed`,
+    `${c.failed} failed`,
+    `${c.couldntRun} couldn’t run`,
+  ]
+  return parts.join(' · ')
+}
+
+/** Average only checks that finished. Skipped/denied checks are not scored. */
 export function scoreFindings(findings: ScanFinding[]): number {
-  if (!findings.length) return 70
-  const scored = findings.map((f) =>
+  const finished = findings.filter((f) => outcomeOf(f) !== 'couldnt_run')
+  if (!finished.length) return 0
+  const scored = finished.map((f) =>
     typeof f.userScore === 'number' ? f.userScore : findingScore(f),
   )
   return Math.round(scored.reduce((n, s) => n + s, 0) / scored.length)
@@ -116,24 +162,18 @@ export function assignFindingsToModules(
 }
 
 export function findingScore(finding: ScanFinding): number {
+  if (outcomeOf(finding) === 'couldnt_run') return 0
   if (typeof finding.userScore === 'number') return finding.userScore
-  if (finding.verdict === 'positive') return 70
-  if (finding.verdict === 'partial' || finding.status === 'partial') return 55
-  if (finding.verdict === 'negative' || finding.status === 'threat') {
+  if (finding.verdict === 'positive' || finding.outcome === 'passed') return 70
+  if (finding.verdict === 'negative' || finding.status === 'threat' || finding.outcome === 'failed') {
     if (finding.severity === 'critical') return 15
     if (finding.severity === 'high') return 28
     return 40
   }
   if (finding.status === 'clear' || finding.status === 'info') return 70
-  if (finding.status === 'warning') return 55
-  return 45
+  return 40
 }
 
 export function verdictLabel(finding: ScanFinding): string {
-  if (finding.verdict === 'positive') return 'Positive'
-  if (finding.verdict === 'negative') return 'Negative'
-  if (finding.verdict === 'partial' || finding.status === 'partial') return 'Partial'
-  if (finding.status === 'threat') return 'Negative'
-  if (finding.status === 'warning') return 'Partial'
-  return 'Positive'
+  return outcomeLabel(outcomeOf(finding))
 }

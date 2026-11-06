@@ -1,4 +1,5 @@
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
+import { anyapiConfigured, anyapiLookupIp } from './anyapi.mjs'
 import {
   dbDeleteBlock,
   dbDeleteUser,
@@ -186,6 +187,25 @@ export async function lookupGeo(ip: string): Promise<GeoInfo> {
       region: 'Development',
       city: 'Localhost',
       isp: 'Local / private network',
+    }
+  }
+  if (anyapiConfigured()) {
+    try {
+      const geo = await anyapiLookupIp(ip)
+      if (geo && !geo.private) {
+        return {
+          ip: geo.ip || ip,
+          country: geo.country,
+          countryCode: geo.countryCode,
+          region: geo.region,
+          city: geo.city,
+          lat: geo.lat,
+          lon: geo.lon,
+          isp: geo.isp,
+        }
+      }
+    } catch {
+      /* fall through */
     }
   }
   try {

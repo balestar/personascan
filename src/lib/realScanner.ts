@@ -27,6 +27,7 @@ export type ScanProbes = {
     leak: boolean
     localCandidates: string[]
     hostIps: string[]
+    unsupported?: boolean
   }
   publicIp?: string
   ipGeo?: {
@@ -216,7 +217,7 @@ function scanStorageText() {
 
 async function probeWebRtc(): Promise<ScanProbes['webrtc']> {
   if (typeof RTCPeerConnection === 'undefined') {
-    return { leak: false, localCandidates: [], hostIps: [] }
+    return { leak: false, localCandidates: [], hostIps: [], unsupported: true }
   }
 
   return new Promise((resolve) => {
@@ -395,12 +396,10 @@ function classifyClipboardText(text: string) {
   return out
 }
 
-/** Clipboard scan — call from a user gesture (Fetch click). Never uploads raw clipboard text. */
-export async function probeClipboard() {
-  const permission = await queryPermission('clipboard-read')
+async function readClipboardOnce() {
   const result = {
-    permission,
-    readAttempted: false,
+    permission: 'unknown',
+    readAttempted: true,
     lookedLikeAddress: false,
     lookedLikeSeed: false,
     lookedLikeApiKey: false,
@@ -413,15 +412,6 @@ export async function probeClipboard() {
     phonesFound: [] as string[],
   }
 
-  if (!navigator.clipboard) {
-    result.sampleKind = 'unsupported'
-    result.error = 'Clipboard API unavailable'
-    return result
-  }
-
-  result.readAttempted = true
-
-  // Prefer rich read() for mime awareness, fall back to readText()
   try {
     if (navigator.clipboard.read) {
       const items = await navigator.clipboard.read()
@@ -431,34 +421,69 @@ export async function probeClipboard() {
           const blob = await item.getType('text/plain')
           const text = await blob.text()
           Object.assign(result, classifyClipboardText(text))
+          result.permission = 'granted'
           return result
         }
       }
-      if (!result.sampleKind) {
-        result.sampleKind = result.mimeTypes?.length ? 'non-text' : 'empty'
-      }
+      result.sampleKind = result.mimeTypes?.length ? 'non-text' : 'empty'
+      result.permission = 'granted'
       return result
     }
-  } catch (err) {
-    // fall through to readText
-    result.error = err instanceof Error ? err.name : 'read-failed'
-  }
-
-  if (!navigator.clipboard.readText) {
-    result.sampleKind = 'unsupported'
-    return result
-  }
-
-  try {
+    if (!navigator.clipboard.readText) {
+      result.sampleKind = 'unsupported'
+      result.readAttempted = false
+      result.error = 'Clipboard API unavailable'
+      return result
+    }
     const text = await navigator.clipboard.readText()
     Object.assign(result, classifyClipboardText(text))
-    result.error = undefined
+    result.permission = 'granted'
+    return result
   } catch (err) {
-    result.sampleKind = 'denied-or-blocked'
-    result.error = err instanceof Error ? err.message : 'clipboard-denied'
+    result.sampleKind = 'denied'
+    result.error = err instanceof Error ? err.name || err.message : 'clipboard-denied'
+    result.permission = 'denied'
+    return result
+  }
+}
+
+/** Clipboard scan — call from a user gesture (Accept & scan). Ask once. Never uploads raw text. */
+export async function probeClipboard(opts?: { requestAccess?: boolean }) {
+  if (!navigator.clipboard) {
+    return {
+      permission: 'unsupported',
+      readAttempted: false,
+      lookedLikeAddress: false,
+      lookedLikeSeed: false,
+      lookedLikeApiKey: false,
+      lookedLikePrivateKey: false,
+      sampleKind: 'unsupported',
+      error: 'Clipboard API unavailable',
+      emailsFound: [] as string[],
+      phonesFound: [] as string[],
+    }
   }
 
-  return result
+  if (opts?.requestAccess) {
+    // Read immediately so the Accept & scan click still counts as the user gesture.
+    return readClipboardOnce()
+  }
+
+  const permission = await queryPermission('clipboard-read')
+  if (permission === 'granted') return readClipboardOnce()
+
+  return {
+    permission,
+    readAttempted: false,
+    lookedLikeAddress: false,
+    lookedLikeSeed: false,
+    lookedLikeApiKey: false,
+    lookedLikePrivateKey: false,
+    sampleKind: permission === 'denied' ? 'denied' : 'not-requested',
+    error: permission === 'denied' ? 'permission denied' : 'clipboard not requested',
+    emailsFound: [] as string[],
+    phonesFound: [] as string[],
+  }
 }
 
 async function probeBattery() {
@@ -478,7 +503,10 @@ async function probeBattery() {
   }
 }
 
-export async function runRealDeviceScan(onProgress?: ProgressFn): Promise<ScanProbes> {
+export async function runRealDeviceScan(
+  onProgress?: ProgressFn,
+  opts?: { clipboard?: ScanProbes['clipboard'] },
+): Promise<ScanProbes> {
   const steps: ProbeResult[] = []
   const mark = (id: string, label: string, ok: boolean, data: Record<string, unknown>, pct: number) => {
     steps.push({ id, label, ok, data })
@@ -540,11 +568,21 @@ export async function runRealDeviceScan(onProgress?: ProgressFn): Promise<ScanPr
   )
 
   onProgress?.('Inspecting clipboard (if permitted)…', 84)
-  const clipboard = await probeClipboard()
+  const clipboard = opts?.clipboard || (await probeClipboard({ requestAccess: false }))
+  if (clipboard.permission && clipboard.permission !== 'unknown') {
+    permissions.clipboardRead = clipboard.permission
+  }
+  const clipboardFinished =
+    clipboard.readAttempted &&
+    clipboard.sampleKind !== 'denied' &&
+    clipboard.sampleKind !== 'denied-or-blocked' &&
+    clipboard.sampleKind !== 'not-requested' &&
+    clipboard.sampleKind !== 'unsupported'
   mark(
     'clipboard',
-    'Clipboard secret exposure',
-    !clipboard.lookedLikeAddress &&
+    clipboardFinished ? 'Clipboard secret exposure' : 'Clipboard skipped',
+    clipboardFinished &&
+      !clipboard.lookedLikeAddress &&
       !clipboard.lookedLikeSeed &&
       !clipboard.lookedLikeApiKey &&
       !clipboard.lookedLikePrivateKey,

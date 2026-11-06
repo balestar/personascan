@@ -13,6 +13,8 @@ export type UserRecord = {
   sessionCount?: number
 }
 
+export type FindingOutcome = 'passed' | 'failed' | 'couldnt_run'
+
 export type DualSideResult = {
   passed: boolean | null
   detail: string
@@ -21,6 +23,8 @@ export type DualSideResult = {
   ms?: number
   source?: string
   title?: string
+  /** Measured value: IP, UA, ICE list, permission state, wallet names. */
+  value?: string
 }
 
 export type ScanFinding = {
@@ -30,18 +34,26 @@ export type ScanFinding = {
   severity: 'low' | 'medium' | 'high' | 'critical' | 'info'
   status: 'clear' | 'warning' | 'threat' | 'info' | 'partial'
   detail: string
-  /** Admin dual-verify wording; recipients should prefer `detail`. */
+  /** Passed / failed / couldn’t run — only finished checks are scored. */
+  outcome?: FindingOutcome
+  /** Measured value shown on the recipient results (IP, wallets, ICE, permission). */
+  evidence?: string
+  /** Admin dual-verify wording; recipients should prefer `detail` + `evidence`. */
   adminDetail?: string
   /** Hide from recipient scan UI (intel / ops-only rows). */
   adminOnly?: boolean
   /** Dual-verify outcome for the user score */
   verdict?: 'positive' | 'negative' | 'partial'
-  /** User-facing check score (70 when dual-confirmed positive) */
+  /** User-facing check score — omitted when the check could not run. */
   userScore?: number
   /** Device probe claim — admin always sees this */
   deviceResult?: DualSideResult
   /** Server confirm and/or threat API — admin always sees this */
   apiResult?: DualSideResult
+  /** Optional threat-intel feed name when this row came from a configured provider. */
+  checkedAgainst?: string
+  /** ISO timestamp when a threat-intel feed was queried. */
+  checkedAt?: string
 }
 
 export type GeoInfo = {
@@ -53,6 +65,9 @@ export type GeoInfo = {
   lat?: number
   lon?: number
   isp?: string
+  /** Worker / edge observed client IP (independent of the page’s ipify lookup). */
+  observedIp?: string
+  observedCountry?: string
 }
 
 export type DeviceInfo = {
@@ -90,7 +105,11 @@ export type ScanSession = {
     positive?: number
     negative?: number
     partial?: number
-    avgUserScore?: number
+    passed?: number
+    failed?: number
+    couldntRun?: number
+    scored?: number
+    avgUserScore?: number | null
     dumped?: boolean
     dumpedAt?: string
     terminateAt?: string

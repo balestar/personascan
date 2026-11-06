@@ -14,7 +14,7 @@ export const SCAN_COVERAGE = [
     group: 'Wallets & clipboard',
     items: [
       'Injected Web3 wallet providers',
-      'Clipboard seed / address / key patterns',
+      'Clipboard (asks once; denied = skipped)',
       'Browser storage secret patterns',
     ],
   },
@@ -33,6 +33,30 @@ export const SCAN_COVERAGE = [
  * Free public or free-tier signup — none of these are required for a real browser scan.
  */
 export const THREAT_INTEL_KEYS = [
+  {
+    id: 'anyapi',
+    name: 'AnyAPI',
+    required: false,
+    public: false,
+    env: 'ANYAPI_API_KEY',
+    note: 'IP geolocation, email, phone, and URL scrape.',
+  },
+  {
+    id: 'urlscan',
+    name: 'urlscan.io',
+    required: false,
+    public: false,
+    env: 'URLSCAN_API_KEY',
+    note: 'Search prior URL/IP scans for malicious verdicts.',
+  },
+  {
+    id: 'cloudmersive',
+    name: 'Cloudmersive',
+    required: false,
+    public: false,
+    env: 'CLOUDMERSIVE_API_KEY',
+    note: 'Website virus / phishing scan.',
+  },
   {
     id: 'phishtank',
     name: 'PhishTank',
@@ -84,9 +108,16 @@ export const THREAT_INTEL_KEYS = [
 ] as const
 
 /** Findings that belong in admin dual-verify UI, not the recipient scan view. */
-export function isUserFacingFinding(f: { id?: string; category?: string; title?: string }) {
+export function isUserFacingFinding(f: {
+  id?: string
+  category?: string
+  title?: string
+  adminOnly?: boolean
+}) {
+  if (f.adminOnly) return false
   const id = String(f.id || '')
   if (id.startsWith('intel_')) return false
+  if (id === 'ua_confirm' || id === 'profile_binding') return false
   if (id.startsWith('scope_note')) return false
   if (/API key|Worker secret|not set|needs .*_API_KEY/i.test(`${f.title || ''} ${f.category || ''}`)) {
     return false

@@ -261,18 +261,21 @@ export default async (req: Request, context: Context) => {
         delete mergedGeo.lat
         delete mergedGeo.lon
       }
+      mergedGeo.observedIp = ip
+      mergedGeo.observedCountry = geo.countryCode
       const probeFindings = buildFindingsFromProbes({
         probes,
         email: user.email,
         country: user.country,
         serverGeo: mergedGeo,
       })
-      const intel = await runThreatIntel({ probes, serverGeo: mergedGeo })
+      const intel = await runThreatIntel({ probes, serverGeo: mergedGeo, email: user.email })
       const findings = dualVerifyFindings({
         probeFindings,
         intelFindings: intel.findings || [],
         probes,
         serverGeo: mergedGeo,
+        requestMeta: { ip, userAgent: ua, country: geo.countryCode || '' },
         intelResults: intel.results || [],
       })
       const completedAt = new Date().toISOString()
@@ -305,7 +308,7 @@ export default async (req: Request, context: Context) => {
       user.lastScanAt = completedAt
       user.lastScanStatus = 'completed'
       user.lastSeenAt = completedAt
-      user.lastIp = String(mergedGeo.ip || ip)
+      user.lastIp = String(ip || mergedGeo.ip)
       await saveUser(user)
 
       return json({

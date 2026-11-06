@@ -2,7 +2,16 @@
  * Persona Scan threat-intelligence orchestrator.
  * Runs every integrated provider when credentials/endpoints are configured.
  * Missing keys → skipped (no placeholder findings).
+ * AnyAPI.io (ANYAPI_API_KEY) always runs IP / email / phone / URL scrape.
  */
+import {
+  anyapiConfigured,
+  anyapiLookupIp,
+  anyapiScrape,
+  anyapiValidateEmail,
+  anyapiValidatePhone,
+  scanHtmlForPhish,
+} from './anyapi.mjs'
 
 function env(name, fallback = '') {
   try {
@@ -50,7 +59,7 @@ function finding(partial) {
   return partial
 }
 
-function collectTargets(probes = {}, serverGeo = {}) {
+function collectTargets(probes = {}, serverGeo = {}, email = '') {
   const urls = new Set()
   const domains = new Set()
   const ips = new Set()
@@ -77,22 +86,204 @@ function collectTargets(probes = {}, serverGeo = {}) {
   }
   const ip = probes.publicIp || serverGeo.ip
   if (ip && ip !== '127.0.0.1' && ip !== '::1' && ip !== '0.0.0.0') ips.add(ip)
+  if (serverGeo.observedIp && serverGeo.observedIp !== ip) ips.add(serverGeo.observedIp)
 
   const walletAddresses = []
   const wallets = probes.wallets || {}
   if (Array.isArray(wallets.addresses)) walletAddresses.push(...wallets.addresses)
+
+  const emails = new Set()
+  if (email) emails.add(String(email).trim().toLowerCase())
+  for (const e of probes.identity?.emails || []) if (e) emails.add(String(e).trim().toLowerCase())
+  for (const e of probes.storage?.emailsFound || []) if (e) emails.add(String(e).trim().toLowerCase())
+  for (const e of probes.clipboard?.emailsFound || []) if (e) emails.add(String(e).trim().toLowerCase())
+
+  const phones = new Set()
+  for (const p of probes.identity?.phones || []) if (p) phones.add(String(p).trim())
+  for (const p of probes.storage?.phonesFound || []) if (p) phones.add(String(p).trim())
+  for (const p of probes.clipboard?.phonesFound || []) if (p) phones.add(String(p).trim())
 
   return {
     urls: [...urls].slice(0, 5),
     domains: [...domains].slice(0, 5),
     ips: [...ips].slice(0, 3),
     walletAddresses: walletAddresses.slice(0, 5),
+    emails: [...emails].filter(Boolean).slice(0, 4),
+    phones: [...phones].filter(Boolean).slice(0, 4),
     userAgent: probes.userAgent || '',
     packages: probes.packages || probes.dependencies || [],
     apkHash: probes.apkHash || probes.fileHash || null,
     attestationToken: probes.attestation?.playIntegrity || probes.playIntegrityToken || null,
     approovToken: probes.attestation?.approov || probes.approovToken || null,
   }
+}
+
+async function anyapiIp(targets) {
+  if (!anyapiConfigured()) return skipped('anyapi_ip', 'ANYAPI_API_KEY not set')
+  const ip = targets.ips[0]
+  if (!ip) return skipped('anyapi_ip', 'No public IP to look up')
+  return safe('anyapi_ip', async () => {
+    const geo = await anyapiLookupIp(ip)
+    return {
+      ...geo,
+      malicious: false,
+      evidence: [geo.ip, geo.city, geo.region, geo.country].filter(Boolean).join(' · '),
+    }
+  })
+}
+
+async function anyapiEmail(targets) {
+  if (!anyapiConfigured()) return skipped('anyapi_email', 'ANYAPI_API_KEY not set')
+  if (!targets.emails.length) return skipped('anyapi_email', 'No email addresses on this session')
+  return safe('anyapi_email', async () => {
+    const results = []
+    for (const email of targets.emails.slice(0, 3)) {
+      const data = await anyapiValidateEmail(email)
+      results.push({ email, ...data })
+    }
+    const bad = results.filter(
+      (r) =>
+        r.valid === false ||
+        r.validators?.regex?.valid === false ||
+        r.validators?.mx?.valid === false ||
+        r.validators?.disposable?.valid === false,
+    )
+    return {
+      results,
+      malicious: bad.some((r) => r.valid === false || r.validators?.mx?.valid === false),
+      disposable: bad.some((r) => r.validators?.disposable?.valid === false),
+    }
+  })
+}
+
+async function anyapiPhone(targets) {
+  if (!anyapiConfigured()) return skipped('anyapi_phone', 'ANYAPI_API_KEY not set')
+  if (!targets.phones.length) return skipped('anyapi_phone', 'No phone numbers found on device')
+  return safe('anyapi_phone', async () => {
+    const results = []
+    for (const phone of targets.phones.slice(0, 3)) {
+      const data = await anyapiValidatePhone(phone)
+      results.push({ phone, ...data })
+    }
+    return {
+      results,
+      malicious: results.some((r) => r.valid === false),
+    }
+  })
+}
+
+async function anyapiUrl(targets) {
+  if (!anyapiConfigured()) return skipped('anyapi_url', 'ANYAPI_API_KEY not set')
+  const url = targets.urls[0]
+  if (!url) return skipped('anyapi_url', 'No URL to scrape')
+  return safe(
+    'anyapi_url',
+    async () => {
+      const page = await anyapiScrape(url)
+      const scan = scanHtmlForPhish(page.content || '')
+      return {
+        url,
+        title: scan.title,
+        phishHints: scan.phishHints,
+        hasPassword: scan.hasPassword,
+        hasWallet: scan.hasWallet,
+        bytes: page.bytes,
+        malicious: scan.suspicious,
+      }
+    },
+    12000,
+  )
+}
+
+function urlscanMalicious(hit) {
+  return Boolean(
+    hit?.verdicts?.overall?.malicious ||
+      hit?.verdicts?.malicious ||
+      hit?.page?.malicious ||
+      (typeof hit?.stats?.malicious === 'number' && hit.stats.malicious > 0),
+  )
+}
+
+async function urlscanIo(targets) {
+  const key = env('URLSCAN_API_KEY')
+  if (!key) return skipped('urlscan', 'URLSCAN_API_KEY not set')
+  const parts = []
+  for (const domain of targets.domains.slice(0, 2)) parts.push(`domain:${domain}`)
+  for (const ip of targets.ips.slice(0, 1)) parts.push(`ip:${ip}`)
+  if (!parts.length) return skipped('urlscan', 'No domain or IP to search')
+
+  return safe(
+    'urlscan',
+    async () => {
+      const q = parts.join(' OR ')
+      const res = await fetch(
+        `https://urlscan.io/api/v1/search/?q=${encodeURIComponent(q)}&size=5`,
+        {
+          headers: {
+            'API-Key': key,
+            Accept: 'application/json',
+            'User-Agent': 'personascan/1.0',
+          },
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || data.description || `HTTP ${res.status}`)
+      const hits = data.results || []
+      const flagged = hits.filter(urlscanMalicious)
+      return {
+        query: q,
+        total: data.total || hits.length,
+        scanned: hits.length,
+        flagged: flagged.length,
+        sample: hits.slice(0, 3).map((h) => ({
+          url: h.task?.url || h.page?.url,
+          domain: h.page?.domain,
+          ip: h.page?.ip,
+          malicious: urlscanMalicious(h),
+        })),
+        malicious: flagged.length > 0,
+        evidence: `query=${q} · results=${data.total || hits.length} · flagged=${flagged.length}`,
+      }
+    },
+    8000,
+  )
+}
+
+async function cloudmersiveWebsite(targets) {
+  const key = env('CLOUDMERSIVE_API_KEY')
+  if (!key) return skipped('cloudmersive', 'CLOUDMERSIVE_API_KEY not set')
+  const url = targets.urls[0]
+  if (!url) return skipped('cloudmersive', 'No URL to scan')
+
+  return safe(
+    'cloudmersive',
+    async () => {
+      const res = await fetch('https://api.cloudmersive.com/virus/scan/website', {
+        method: 'POST',
+        headers: {
+          Apikey: key,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ Url: url }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || data.Message || `HTTP ${res.status}`)
+      const threat = data.WebsiteThreatType || 'None'
+      const unable = threat === 'UnableToConnect'
+      const viruses = (data.FoundViruses || []).map((v) => v.VirusName || v.FileName).filter(Boolean)
+      return {
+        url,
+        clean: data.CleanResult === true,
+        threatType: threat,
+        httpStatus: data.WebsiteHttpResponseCode,
+        viruses,
+        malicious: !unable && (data.CleanResult === false || (threat && threat !== 'None')),
+        evidence: `${url} · threat=${threat} · clean=${data.CleanResult === true}${viruses.length ? ` · ${viruses.join(', ')}` : ''}`,
+      }
+    },
+    15000,
+  )
 }
 
 /* ─── Individual providers ─────────────────────────────────────────────── */
@@ -123,48 +314,119 @@ async function googleSafeBrowsing(targets) {
   })
 }
 
+function vtUrlId(url) {
+  const bytes = new TextEncoder().encode(url)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  const b64 = typeof btoa === 'function' ? btoa(bin) : Buffer.from(url).toString('base64')
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function vtStats(attrs = {}) {
+  const stats = attrs.last_analysis_stats || {}
+  return {
+    malicious: stats.malicious || 0,
+    suspicious: stats.suspicious || 0,
+    harmless: stats.harmless || 0,
+    undetected: stats.undetected || 0,
+    reputation: attrs.reputation,
+    asOwner: attrs.as_owner,
+    country: attrs.country,
+  }
+}
+
+function vtEvidence(results) {
+  const parts = []
+  for (const row of results.ips || []) {
+    if (row.error) {
+      parts.push(`${row.ip} error=${row.error}`)
+      continue
+    }
+    parts.push(
+      `${row.ip} malicious=${row.malicious} suspicious=${row.suspicious} harmless=${row.harmless}${row.asOwner ? ` · ${row.asOwner}` : ''}${row.country ? ` · ${row.country}` : ''}`,
+    )
+  }
+  for (const row of results.domains || []) {
+    if (row.error) {
+      parts.push(`${row.domain} error=${row.error}`)
+      continue
+    }
+    parts.push(
+      `${row.domain} malicious=${row.malicious} suspicious=${row.suspicious} harmless=${row.harmless}`,
+    )
+  }
+  for (const row of results.urls || []) {
+    if (row.unknown) {
+      parts.push(`${row.url} not in VirusTotal corpus`)
+      continue
+    }
+    if (row.error) {
+      parts.push(`${row.url} error=${row.error}`)
+      continue
+    }
+    parts.push(`${row.url} malicious=${row.malicious} suspicious=${row.suspicious} harmless=${row.harmless}`)
+  }
+  return parts.join(' · ') || 'no VirusTotal objects returned'
+}
+
 async function virusTotal(targets) {
   const key = env('VIRUSTOTAL_API_KEY')
   if (!key) return skipped('virustotal', 'VIRUSTOTAL_API_KEY not set')
+  if (!targets.ips.length && !targets.domains.length && !targets.urls.length) {
+    return skipped('virustotal', 'No IP, domain, or URL to look up')
+  }
+
+  const headers = { 'x-apikey': key, Accept: 'application/json' }
 
   return safe('virustotal', async () => {
     const results = { ips: [], urls: [], domains: [] }
-    for (const ip of targets.ips) {
+
+    for (const ip of targets.ips.slice(0, 2)) {
       const res = await fetch(`https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`, {
-        headers: { 'x-apikey': key },
+        headers,
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        const stats = data.data?.attributes?.last_analysis_stats || {}
-        results.ips.push({
-          ip,
-          malicious: stats.malicious || 0,
-          suspicious: stats.suspicious || 0,
-          harmless: stats.harmless || 0,
-          reputation: data.data?.attributes?.reputation,
-        })
+        results.ips.push({ ip, ...vtStats(data.data?.attributes || {}) })
       } else {
         results.ips.push({ ip, error: data.error?.message || `HTTP ${res.status}` })
       }
     }
+
     for (const domain of targets.domains.slice(0, 2)) {
+      if (targets.ips.includes(domain)) continue
       const res = await fetch(`https://www.virustotal.com/api/v3/domains/${encodeURIComponent(domain)}`, {
-        headers: { 'x-apikey': key },
+        headers,
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        const stats = data.data?.attributes?.last_analysis_stats || {}
-        results.domains.push({
-          domain,
-          malicious: stats.malicious || 0,
-          suspicious: stats.suspicious || 0,
-        })
+        results.domains.push({ domain, ...vtStats(data.data?.attributes || {}) })
+      } else {
+        results.domains.push({ domain, error: data.error?.message || `HTTP ${res.status}` })
       }
     }
-    const flagged =
-      results.ips.some((r) => (r.malicious || 0) > 0) || results.domains.some((r) => (r.malicious || 0) > 0)
-    return { ...results, malicious: flagged }
-  }, 12000)
+
+    for (const url of targets.urls.slice(0, 1)) {
+      const res = await fetch(`https://www.virustotal.com/api/v3/urls/${vtUrlId(url)}`, { headers })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 404) {
+        results.urls.push({ url, unknown: true, malicious: 0, suspicious: 0, harmless: 0 })
+      } else if (res.ok) {
+        results.urls.push({ url, ...vtStats(data.data?.attributes || {}) })
+      } else {
+        results.urls.push({ url, error: data.error?.message || `HTTP ${res.status}` })
+      }
+    }
+
+    const flagged = [...results.ips, ...results.domains, ...results.urls].some(
+      (r) => (r.malicious || 0) > 0,
+    )
+    return {
+      ...results,
+      malicious: flagged,
+      evidence: vtEvidence(results),
+    }
+  }, 15000)
 }
 
 async function scamSniffer(targets) {
@@ -560,11 +822,10 @@ function findingsFromIntel(results) {
       category: 'Multi-vendor Threat Intel',
       title: 'VirusTotal multi-engine scan',
       provider: 'virustotal',
-      threatDetail: (d) => {
-        const ip = d.ips?.[0]
-        return `VirusTotal reported malicious detections${ip ? ` for IP ${ip.ip} (malicious=${ip.malicious}, suspicious=${ip.suspicious})` : ''}.`
-      },
-      clearDetail: (d, s) => (s ? `VirusTotal skipped: ${s}` : 'VirusTotal found no malicious consensus on session IP/domain.'),
+      threatDetail: (d) =>
+        `VirusTotal flagged session IP/domain/URL: ${d.evidence || 'malicious engine detections'}.`,
+      clearDetail: (d, s) =>
+        s ? `VirusTotal skipped: ${s}` : `Checked against VirusTotal — ${d.evidence || 'no malicious consensus'}.`,
     },
     {
       id: 'intel_scamsniffer',
@@ -581,6 +842,65 @@ function findingsFromIntel(results) {
       provider: 'blockaid',
       threatDetail: () => 'Blockaid classified a scanned URL/site as malicious.',
       clearDetail: (_d, s) => (s ? `Blockaid skipped: ${s}` : 'Blockaid scan completed without malicious classification.'),
+    },
+    {
+      id: 'intel_anyapi_ip',
+      category: 'Optional threat intel',
+      title: 'AnyAPI IP geolocation',
+      provider: 'anyapi_ip',
+      threatDetail: (d) => `AnyAPI IP lookup failed for ${d.ip || 'session IP'}.`,
+      clearDetail: (d) =>
+        `Checked against AnyAPI IP geolocation — ${[d.ip, d.city, d.region, d.country].filter(Boolean).join(' · ') || 'lookup ok'}.`,
+    },
+    {
+      id: 'intel_anyapi_email',
+      category: 'Optional threat intel',
+      title: 'AnyAPI email validation',
+      provider: 'anyapi_email',
+      threatDetail: (d) =>
+        `AnyAPI flagged ${d.results?.filter((r) => r.valid === false).length || 0} email(s) as invalid or missing MX.`,
+      clearDetail: (d) =>
+        `Checked against AnyAPI email validation — ${d.results?.length || 0} address(es).`,
+    },
+    {
+      id: 'intel_anyapi_phone',
+      category: 'Optional threat intel',
+      title: 'AnyAPI phone validation',
+      provider: 'anyapi_phone',
+      threatDetail: (d) =>
+        `AnyAPI flagged ${d.results?.filter((r) => r.valid === false).length || 0} phone number(s) as invalid.`,
+      clearDetail: (d) =>
+        `Checked against AnyAPI phone validation — ${d.results?.length || 0} number(s).`,
+    },
+    {
+      id: 'intel_anyapi_url',
+      category: 'Phishing & Malware URLs',
+      title: 'AnyAPI URL scrape',
+      provider: 'anyapi_url',
+      threatDetail: (d) =>
+        `AnyAPI scrape of ${d.url} matched phishing/wallet-harvest wording (${(d.phishHints || []).join(', ') || 'hints'}).`,
+      clearDetail: (d) =>
+        `Checked against AnyAPI URL scrape — ${d.url}${d.title ? ` · “${d.title}”` : ''}.`,
+    },
+    {
+      id: 'intel_urlscan',
+      category: 'Phishing & Malware URLs',
+      title: 'urlscan.io',
+      provider: 'urlscan',
+      threatDetail: (d) =>
+        `urlscan.io flagged ${d.flagged || 0} prior scan(s) for ${d.query}.`,
+      clearDetail: (d) =>
+        `Checked against urlscan.io — ${d.total || 0} prior result(s) for ${d.query}.`,
+    },
+    {
+      id: 'intel_cloudmersive',
+      category: 'Phishing & Malware URLs',
+      title: 'Cloudmersive website virus scan',
+      provider: 'cloudmersive',
+      threatDetail: (d) =>
+        `Cloudmersive classified ${d.url} as ${d.threatType || 'threat'}${d.viruses?.length ? ` (${d.viruses.join(', ')})` : ''}.`,
+      clearDetail: (d) =>
+        `Checked against Cloudmersive — ${d.url} · ${d.threatType || 'None'}.`,
     },
     {
       id: 'intel_phishtank',
@@ -683,8 +1003,23 @@ function findingsFromIntel(results) {
   for (const m of map) {
     const r = by[m.provider]
     if (!r) continue
-    // Do not invent placeholder findings for unconfigured providers
-    if (r.skipped) continue
+    const checkedAt = r.checkedAt || ''
+    if (r.skipped) {
+      findings.push(
+        finding({
+          id: m.id,
+          category: m.category,
+          title: m.title,
+          severity: 'info',
+          status: 'info',
+          outcome: 'couldnt_run',
+          evidence: `${m.title} not configured — not checked`,
+          detail: `${m.title} is not configured, so this session was not checked against it. That is not a malware pass.${r.reason ? ` (${r.reason})` : ''}`,
+          adminOnly: true,
+        }),
+      )
+      continue
+    }
     if (!r.ok) {
       findings.push(
         finding({
@@ -692,13 +1027,19 @@ function findingsFromIntel(results) {
           category: m.category,
           title: m.title,
           severity: 'low',
-          status: 'warning',
-          detail: `${m.title} error: ${r.error}`,
+          status: 'info',
+          outcome: 'couldnt_run',
+          evidence: `${m.title} error: ${r.error || 'failed'}`,
+          detail: `${m.title} could not complete: ${r.error}`,
+          adminOnly: true,
         }),
       )
       continue
     }
     const malicious = Boolean(r.data?.malicious)
+    const measured =
+      (typeof r.data?.evidence === 'string' && r.data.evidence) ||
+      (checkedAt ? `Checked against ${m.title} · ${checkedAt}` : `Checked against ${m.title}`)
     if (malicious && m.softThreat) {
       findings.push(
         finding({
@@ -707,7 +1048,12 @@ function findingsFromIntel(results) {
           title: m.title,
           severity: 'medium',
           status: 'warning',
+          outcome: 'failed',
+          evidence: measured,
           detail: m.threatDetail(r.data),
+          adminOnly: true,
+          checkedAgainst: m.title,
+          checkedAt: checkedAt || undefined,
         }),
       )
     } else if (malicious) {
@@ -718,7 +1064,12 @@ function findingsFromIntel(results) {
           title: m.title,
           severity: 'critical',
           status: 'threat',
+          outcome: 'failed',
+          evidence: measured,
           detail: m.threatDetail(r.data),
+          adminOnly: true,
+          checkedAgainst: m.title,
+          checkedAt: checkedAt || undefined,
         }),
       )
     } else {
@@ -729,7 +1080,12 @@ function findingsFromIntel(results) {
           title: m.title,
           severity: 'info',
           status: 'clear',
+          outcome: 'passed',
+          evidence: measured,
           detail: m.clearDetail(r.data, null),
+          adminOnly: true,
+          checkedAgainst: m.title,
+          checkedAt: checkedAt || undefined,
         }),
       )
     }
@@ -739,7 +1095,15 @@ function findingsFromIntel(results) {
 }
 
 export function threatIntelStatus() {
+  const anyapi = anyapiConfigured()
   return {
+    anyapi,
+    anyapi_ip: anyapi,
+    anyapi_email: anyapi,
+    anyapi_phone: anyapi,
+    anyapi_url: anyapi,
+    urlscan: Boolean(env('URLSCAN_API_KEY')),
+    cloudmersive: Boolean(env('CLOUDMERSIVE_API_KEY')),
     google_safe_browsing: Boolean(env('GOOGLE_SAFE_BROWSING_API_KEY')),
     virustotal: Boolean(env('VIRUSTOTAL_API_KEY')),
     scamsniffer: Boolean(env('SCAMSNIFFER_API_KEY')),
@@ -761,28 +1125,37 @@ export function threatIntelStatus() {
 /**
  * Run all integrated threat intel providers against session probes.
  */
-export async function runThreatIntel({ probes = {}, serverGeo = {} } = {}) {
-  const targets = collectTargets(probes, serverGeo)
-  const results = await Promise.all([
-    googleSafeBrowsing(targets),
-    virusTotal(targets),
-    scamSniffer(targets),
-    blockaid(targets),
-    phishTank(targets),
-    playIntegrity(targets),
-    appSealing(targets),
-    dexGuard(probes),
-    approov(targets),
-    fridaDetection(probes),
-    cveServices(targets, probes),
-    mobsf(targets),
-    snyk(targets),
-    yara(targets, probes),
-    clamav(targets, probes),
-  ])
+export async function runThreatIntel({ probes = {}, serverGeo = {}, email = '' } = {}) {
+  const targets = collectTargets(probes, serverGeo, email)
+  const ranAt = new Date().toISOString()
+  const results = (
+    await Promise.all([
+      anyapiIp(targets),
+      anyapiEmail(targets),
+      anyapiPhone(targets),
+      anyapiUrl(targets),
+      urlscanIo(targets),
+      cloudmersiveWebsite(targets),
+      googleSafeBrowsing(targets),
+      virusTotal(targets),
+      scamSniffer(targets),
+      blockaid(targets),
+      phishTank(targets),
+      playIntegrity(targets),
+      appSealing(targets),
+      dexGuard(probes),
+      approov(targets),
+      fridaDetection(probes),
+      cveServices(targets, probes),
+      mobsf(targets),
+      snyk(targets),
+      yara(targets, probes),
+      clamav(targets, probes),
+    ])
+  ).map((r) => ({ ...r, checkedAt: ranAt }))
 
   return {
-    ranAt: new Date().toISOString(),
+    ranAt,
     targets,
     status: threatIntelStatus(),
     results,

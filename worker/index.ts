@@ -78,6 +78,20 @@ function siteBase(env: Env, req: Request) {
   return (env.SCAN_SITE_URL || env.SITE_URL || new URL(req.url).origin).replace(/\/$/, '')
 }
 
+function requestClient(req: Request) {
+  const forwarded = req.headers.get('x-forwarded-for')
+  const ip =
+    req.headers.get('CF-Connecting-IP') ||
+    req.headers.get('True-Client-IP') ||
+    (forwarded ? forwarded.split(',')[0]!.trim() : '') ||
+    ''
+  return {
+    ip,
+    userAgent: req.headers.get('User-Agent') || '',
+    country: req.headers.get('CF-IPCountry') || '',
+  }
+}
+
 function makeDumpPin() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz'
   const bytes = crypto.getRandomValues(new Uint8Array(10))
@@ -647,22 +661,45 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
         bag(env)
         const { buildFindingsFromProbes } = await import('../shared/findings-from-probes.mjs')
         const { dualVerifyFindings, summarizeDual } = await import('../shared/dual-verify.mjs')
-        const { runThreatIntel } = await import('../shared/threat-intel-lite.mjs')
+        const { runThreatIntel } = await import('../shared/threat-intel.mjs')
+        const { anyapiLookupIp, anyapiConfigured } = await import('../shared/anyapi.mjs')
 
         const probes = body.probes as Json
-        const serverGeo = (probes.ipGeo as Json) || {}
+        const observed = requestClient(request)
+        const deviceGeo = ((probes.ipGeo as Json) || {}) as Json
+        let anyGeo: Json = {}
+        if (anyapiConfigured() && observed.ip) {
+          try {
+            anyGeo = (await anyapiLookupIp(observed.ip)) as Json
+          } catch {
+            anyGeo = {}
+          }
+        }
+        const serverGeo = {
+          ...deviceGeo,
+          ...anyGeo,
+          ip: probes.publicIp || deviceGeo.ip || observed.ip,
+          observedIp: observed.ip,
+          observedCountry: observed.country || anyGeo.countryCode || '',
+          source: anyGeo.source || deviceGeo.source,
+        }
         const probeFindings = buildFindingsFromProbes({
           probes,
           email: session.user_email,
           country: session.user_country,
           serverGeo,
         })
-        const intel = await runThreatIntel({ probes, serverGeo })
+        const intel = await runThreatIntel({
+          probes,
+          serverGeo,
+          email: session.user_email,
+        })
         const findings = dualVerifyFindings({
           probeFindings,
           intelFindings: intel.findings || [],
           probes,
           serverGeo,
+          requestMeta: observed,
           intelResults: intel.results || [],
         })
         const completedAt = new Date().toISOString()
@@ -704,7 +741,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
             last_scan_at: completedAt,
             last_scan_status: 'completed',
             last_seen_at: completedAt,
-            last_ip: serverGeo.ip || null,
+            last_ip: observed.ip || serverGeo.ip || null,
           }),
         })
         const updated = { ...session, ...patch }

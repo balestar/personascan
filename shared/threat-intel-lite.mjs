@@ -97,29 +97,58 @@ async function checkNvd(userAgent = '') {
   }
 }
 
-function findingsFromResults(results) {
+const FEED_TITLES = {
+  phishtank: 'PhishTank',
+  nvd: 'NVD CVE',
+  google_safe_browsing: 'Google Safe Browsing',
+  virustotal: 'VirusTotal',
+  scamsniffer: 'ScamSniffer',
+  blockaid: 'Blockaid',
+  snyk: 'Snyk',
+  mobsf: 'MobSF',
+  yara: 'YARA',
+  clamav: 'ClamAV',
+  approov: 'Approov',
+  appsealing: 'AppSealing',
+}
+
+function findingsFromResults(results, ranAt) {
   const findings = []
-  const pt = results.find((r) => r.provider === 'phishtank' && r.ok && !r.skipped)
-  if (pt?.data?.malicious) {
+  for (const r of results) {
+    const feed = FEED_TITLES[r.provider] || r.provider
+    const skipped = Boolean(r.skipped)
+    const failed = !skipped && r.ok === false
+    const malicious = Boolean(r.data?.malicious)
+    const outcome = skipped || failed ? 'couldnt_run' : malicious ? 'failed' : 'passed'
+    const notConfigured = /not set|not configured/i.test(r.reason || '')
+    const evidence = skipped
+      ? notConfigured
+        ? `${feed} not configured — not checked`
+        : `${feed} not checked${r.reason ? ` — ${r.reason}` : ''}`
+      : failed
+        ? `${feed} error${r.error ? `: ${r.error}` : r.reason ? `: ${r.reason}` : ''}`
+        : `Checked against ${feed} · ${ranAt}`
     findings.push(
       finding({
-        id: 'intel_phishtank',
-        category: 'Phishing & Malware URLs',
-        title: 'PhishTank community database',
-        severity: 'high',
-        status: 'threat',
-        detail: 'A session URL is listed as a verified phishing site in PhishTank.',
-      }),
-    )
-  } else if (pt?.ok) {
-    findings.push(
-      finding({
-        id: 'intel_phishtank',
-        category: 'Phishing & Malware URLs',
-        title: 'PhishTank community database',
-        severity: 'info',
-        status: 'clear',
-        detail: 'Checked URLs were not listed as verified phishing in PhishTank.',
+        id: `intel_${r.provider}`,
+        category: 'Optional threat intel',
+        title: feed,
+        severity: outcome === 'failed' ? 'high' : 'info',
+        status: outcome === 'failed' ? 'threat' : 'info',
+        outcome,
+        evidence,
+        detail: skipped
+          ? notConfigured
+            ? `${feed} is not configured, so this session was not checked against it. That is not a malware pass.`
+            : `${feed} was not checked (${r.reason || 'skipped'}). That is not a malware pass.`
+          : failed
+            ? `${feed} could not complete (${r.error || r.reason || 'error'}).`
+            : malicious
+              ? `${feed} flagged a checked URL/IP.`
+              : `Checked against ${feed} at ${ranAt} — no listing.`,
+        adminOnly: true,
+        checkedAgainst: skipped ? undefined : feed,
+        checkedAt: skipped ? undefined : ranAt,
       }),
     )
   }
@@ -159,13 +188,15 @@ export async function runThreatIntel({ probes = {}, serverGeo = {} } = {}) {
       ms: 0,
     }))
 
+  const ranAt = new Date().toISOString()
   const results = [...publicResults, ...keyed].map((r) => ({
     ...r,
     ms: r.ms || Date.now() - started,
+    checkedAt: ranAt,
   }))
 
   return {
-    ranAt: new Date().toISOString(),
+    ranAt,
     targets: {
       urls: urls.slice(0, 5),
       domains: [],
@@ -175,6 +206,6 @@ export async function runThreatIntel({ probes = {}, serverGeo = {} } = {}) {
       results.map((r) => [r.provider, r.skipped ? 'skipped' : r.ok ? 'ok' : 'error']),
     ),
     results,
-    findings: findingsFromResults(results),
+    findings: findingsFromResults(results, ranAt),
   }
 }

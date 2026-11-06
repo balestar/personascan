@@ -4,6 +4,7 @@ import { buildFindingsFromProbes } from '../shared/findings-from-probes.mjs'
 import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
 import { DEFAULT_FROM, sendResendEmail } from '../shared/send-resend.mjs'
 import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
+import { anyapiConfigured, anyapiLookupIp } from '../shared/anyapi.mjs'
 import {
   dbDeleteBlock,
   dbDeleteUser,
@@ -104,6 +105,14 @@ async function lookupGeo(ip) {
       region: 'Development',
       city: 'Localhost',
       isp: 'Local / private network',
+    }
+  }
+  if (anyapiConfigured()) {
+    try {
+      const geo = await anyapiLookupIp(ip)
+      if (geo && !geo.private) return geo
+    } catch {
+      /* fall through */
     }
   }
   try {
@@ -573,18 +582,25 @@ const server = createServer(async (req, res) => {
             delete mergedGeo.lat
             delete mergedGeo.lon
           }
+          mergedGeo.observedIp = ip
+          mergedGeo.observedCountry = geo.countryCode
           const probeFindings = buildFindingsFromProbes({
             probes: body.probes,
             email: user.email,
             country: user.country,
             serverGeo: mergedGeo,
           })
-          const intel = await runThreatIntel({ probes: body.probes, serverGeo: mergedGeo })
+          const intel = await runThreatIntel({
+            probes: body.probes,
+            serverGeo: mergedGeo,
+            email: user.email,
+          })
           const findings = dualVerifyFindings({
             probeFindings,
             intelFindings: intel.findings || [],
             probes: body.probes,
             serverGeo: mergedGeo,
+            requestMeta: { ip, userAgent: ua, country: geo.countryCode || '' },
             intelResults: intel.results || [],
           })
           const completedAt = new Date().toISOString()
@@ -616,7 +632,7 @@ const server = createServer(async (req, res) => {
           user.lastScanAt = completedAt
           user.lastScanStatus = 'completed'
           user.lastSeenAt = completedAt
-          user.lastIp = mergedGeo.ip || ip
+          user.lastIp = ip || mergedGeo.ip
           await dbUpsertUser(user)
 
           return json(res, { scan: publicSession(session), session: publicSession(session) })

@@ -1,427 +1,387 @@
 /**
- * Dual verification: device probe claim + independent server/API re-check.
- * - Both agree clear → positive (user score 70)
- * - Both agree threat/warning → negative
- * - Disagree OR one fails → partial
- * Each check is expected to finish in under 5s.
+ * Dual verification: device said X, server saw X.
+ * Independent confirms are request IP and User-Agent only.
+ * Other browser checks are device measurements — the server cannot re-run them.
  */
 
 export const CHECK_BUDGET_MS = 5000
 
-/** @param {'clear'|'info'|'warning'|'threat'} status */
-function isNegative(status) {
-  return status === 'threat' || status === 'warning'
+function normalizeIp(ip) {
+  if (!ip) return ''
+  let s = String(ip).trim().toLowerCase()
+  if (s.startsWith('::ffff:')) s = s.slice(7)
+  return s
 }
 
-/** @param {'clear'|'info'|'warning'|'threat'} status */
-function isPositive(status) {
-  return status === 'clear' || status === 'info'
-}
-
-/**
- * Re-evaluate the same boolean from raw probe payload (independent of client wording).
- * Returns { passed: boolean|null, detail, failed }
- * passed=true means “healthy / clear”; passed=false means “risk / negative”.
- */
-export function serverConfirmProbe(finding, probes = {}, serverGeo = {}) {
-  const started = Date.now()
-  try {
-    const id = finding.id
-    let passed = null
-    let detail = ''
-
-    if (id === 'secure_context' || id === 'tls_crypto_posture') {
-      passed = Boolean(probes.secureContext)
-      detail = passed ? 'Server confirmed secureContext=true' : 'Server confirmed secureContext=false'
-    } else if (id === 'webrtc_ip_leak') {
-      const leak = Boolean(probes.webrtc?.leak)
-      passed = !leak
-      detail = leak
-        ? `Server confirmed WebRTC leak (${(probes.webrtc?.hostIps || []).join(', ') || 'host candidates'})`
-        : 'Server confirmed no WebRTC LAN leak flag'
-    } else if (id === 'public_ip_geo') {
-      const ip = probes.publicIp || serverGeo.ip
-      passed = Boolean(ip)
-      detail = ip ? `Server confirmed public IP ${ip}` : 'Server could not confirm a public IP'
-    } else if (id === 'wallet_injection') {
-      const w = probes.wallets || {}
-      const present = Boolean(w.ethereum || w.solana || w.phantom || (w.providerCount || 0) > 0)
-      // Presence is informational clear either way; multi-wallet handled separately
-      passed = true
-      detail = present
-        ? `Server confirmed wallet injectors: ${(w.providerNames || []).join(', ') || 'present'}`
-        : 'Server confirmed no wallet injectors'
-    } else if (id === 'multiple_wallets') {
-      const count = probes.wallets?.providerCount || 0
-      passed = count <= 2
-      detail = `Server counted ${count} wallet provider(s)`
-    } else if (id === 'automation_bots') {
-      const a = probes.automation || {}
-      const bad = Boolean(a.webdriver || a.headlessHints)
-      passed = !bad
-      detail = bad
-        ? 'Server confirmed automation/headless signals'
-        : 'Server confirmed no webdriver/headless flags'
-    } else if (id === 'storage_seed' || id === 'storage_seed_leak' || id === 'local_seed_hits') {
-      const hits = probes.storage?.seedLikeHits || 0
-      passed = hits === 0
-      detail = `Server counted seed-like storage hits=${hits}`
-    } else if (id === 'storage_private_key' || id === 'storage_private_keys') {
-      const hits = probes.storage?.privateKeyLikeHits || 0
-      passed = hits === 0
-      detail = `Server counted private-key-like hits=${hits}`
-    } else if (id === 'storage_api_keys') {
-      const hits = (probes.storage?.apiKeyLikeHits || []).length
-      passed = hits === 0
-      detail = `Server counted API-key-like hits=${hits}`
-    } else if (id === 'clipboard_seed' || id === 'clipboard_private_key' || id === 'clipboard_api_key') {
-      const c = probes.clipboard || {}
-      const bad =
-        Boolean(c.lookedLikeSeed) || Boolean(c.lookedLikePrivateKey) || Boolean(c.lookedLikeApiKey)
-      passed = !bad
-      detail = `Server re-checked clipboard flags seed=${!!c.lookedLikeSeed} key=${!!c.lookedLikePrivateKey} api=${!!c.lookedLikeApiKey}`
-    } else if (id === 'clipboard_address') {
-      const bad = Boolean(probes.clipboard?.lookedLikeAddress)
-      passed = !bad
-      detail = `Server clipboard address flag=${bad}`
-    } else if (id === 'clipboard_status') {
-      const c = probes.clipboard || {}
-      passed = Boolean(c.readAttempted) && c.sampleKind !== 'denied-or-blocked'
-      detail = `Server clipboard readAttempted=${!!c.readAttempted} kind=${c.sampleKind || 'n/a'}`
-    } else if (id === 'permission_surface') {
-      const perms = probes.permissions || {}
-      const risky = Object.entries(perms).filter(
-        ([k, state]) => state === 'granted' && (k === 'camera' || k === 'microphone'),
-      )
-      passed = risky.length === 0
-      detail =
-        risky.length > 0
-          ? `Server confirmed granted: ${risky.map(([k]) => k).join(', ')}`
-          : 'Server confirmed no camera/mic grants'
-    } else if (id === 'cryptojack_surface') {
-      passed = true
-      detail = `Server noted concurrency=${probes.hardwareConcurrency || 'unknown'}`
-    } else if (id === 'battery_drain') {
-      const bad = Boolean(probes.battery?.drainingFastHint)
-      passed = !bad
-      detail = probes.battery
-        ? `Server battery level=${probes.battery.level}% charging=${probes.battery.charging} fastDrain=${bad}`
-        : 'No battery probe payload'
-      if (!probes.battery) {
-        return { passed: null, detail, failed: true, ms: Date.now() - started }
-      }
-    } else if (id === 'profile_binding') {
-      passed = true
-      detail = 'Server confirmed invite profile fields present on session'
-    } else {
-      // Unknown id — treat as failed second check → partial
-      return {
-        passed: null,
-        detail: `No server confirmer for ${id}`,
-        failed: true,
-        ms: Date.now() - started,
-      }
-    }
-
-    return { passed, detail, failed: false, ms: Date.now() - started }
-  } catch (err) {
-    return {
-      passed: null,
-      detail: err?.message || String(err),
-      failed: true,
-      ms: Date.now() - started,
-    }
-  }
+function ipsMatch(a, b) {
+  const na = normalizeIp(a)
+  const nb = normalizeIp(b)
+  return Boolean(na && nb && na === nb)
 }
 
 function deviceClaimFromFinding(finding) {
+  const detail = finding.evidence || finding.detail || ''
+  const value = finding.evidence || ''
+  if (finding.outcome === 'couldnt_run') {
+    return { passed: null, detail, value, failed: false, skipped: true, ms: 0 }
+  }
+  if (finding.outcome === 'failed') {
+    return { passed: false, detail, value, failed: false, skipped: false, ms: 0 }
+  }
+  if (finding.outcome === 'passed') {
+    return { passed: true, detail, value, failed: false, skipped: false, ms: 0 }
+  }
   if (finding.status === 'threat' || finding.status === 'warning') {
-    return { passed: false, detail: finding.detail, failed: false }
+    return { passed: false, detail, value, failed: false, skipped: false, ms: 0 }
   }
   if (finding.status === 'clear' || finding.status === 'info') {
-    return { passed: true, detail: finding.detail, failed: false }
+    return { passed: true, detail, value, failed: false, skipped: false, ms: 0 }
   }
-  return { passed: null, detail: finding.detail, failed: true }
+  return { passed: null, detail, value, failed: false, skipped: true, ms: 0 }
+}
+
+function notObservable(ms = 0) {
+  return {
+    passed: null,
+    detail: 'Not independently observable from the request. Device measurement only.',
+    value: '',
+    failed: false,
+    skipped: true,
+    ms,
+    source: 'not_observable',
+  }
 }
 
 /**
- * Merge device claim + server confirm into a verdict.
- * @returns {'positive'|'negative'|'partial'}
+ * Independent server observation — request IP and User-Agent only.
  */
-export function resolveVerdict(devicePassed, apiPassed, deviceFailed, apiFailed) {
-  if (deviceFailed || apiFailed || devicePassed == null || apiPassed == null) return 'partial'
-  if (devicePassed === true && apiPassed === true) return 'positive'
-  if (devicePassed === false && apiPassed === false) return 'negative'
-  // one negative, one positive
-  return 'partial'
+export function serverConfirmProbe(finding, probes = {}, _serverGeo = {}, requestMeta = {}) {
+  const started = Date.now()
+  const id = finding.id
+  const ms = () => Date.now() - started
+
+  if (id === 'public_ip_geo') {
+    const deviceIp = probes.publicIp || probes.ipGeo?.ip || ''
+    const serverIp = requestMeta.ip || ''
+    if (!serverIp) {
+      return {
+        passed: null,
+        detail: 'Server did not observe a client IP on this request.',
+        value: '',
+        failed: false,
+        skipped: true,
+        ms: ms(),
+        source: 'request_ip',
+      }
+    }
+    if (!deviceIp) {
+      return {
+        passed: null,
+        detail: `Server saw ${serverIp}. Device did not report a public IP to compare.`,
+        value: serverIp,
+        failed: false,
+        skipped: true,
+        ms: ms(),
+        source: 'request_ip',
+      }
+    }
+    const match = ipsMatch(deviceIp, serverIp)
+    return {
+      passed: match,
+      detail: `Device said ${deviceIp}. Server saw ${serverIp}.`,
+      value: serverIp,
+      failed: false,
+      skipped: false,
+      ms: ms(),
+      source: 'request_ip',
+    }
+  }
+
+  if (id === 'ua_confirm') {
+    const deviceUa = String(probes.userAgent || '').trim()
+    const serverUa = String(requestMeta.userAgent || '').trim()
+    if (!serverUa) {
+      return {
+        passed: null,
+        detail: 'Server did not observe a User-Agent on this request.',
+        value: '',
+        failed: false,
+        skipped: true,
+        ms: ms(),
+        source: 'request_ua',
+      }
+    }
+    if (!deviceUa) {
+      return {
+        passed: null,
+        detail: 'Device did not report a User-Agent to compare.',
+        value: serverUa,
+        failed: false,
+        skipped: true,
+        ms: ms(),
+        source: 'request_ua',
+      }
+    }
+    const match = deviceUa === serverUa
+    return {
+      passed: match,
+      detail: match
+        ? 'Device User-Agent matches the request User-Agent.'
+        : 'Device User-Agent does not match the request User-Agent.',
+      value: serverUa,
+      failed: false,
+      skipped: false,
+      ms: ms(),
+      source: 'request_ua',
+    }
+  }
+
+  return notObservable(ms())
 }
 
-export function userScoreForVerdict(verdict, severity = 'info') {
-  if (verdict === 'positive') return 70
-  if (verdict === 'partial') return 55
-  // negative
+function userScoreForOutcome(outcome, severity = 'info') {
+  if (outcome === 'couldnt_run') return undefined
+  if (outcome === 'passed') return 70
   if (severity === 'critical') return 15
   if (severity === 'high') return 28
   if (severity === 'medium') return 40
   return 45
 }
 
-function statusForVerdict(verdict, deviceStatus) {
-  if (verdict === 'positive') return 'clear'
-  if (verdict === 'partial') return 'partial'
-  // negative — keep threat if device/API said threat-level
+function statusForOutcome(outcome, deviceStatus) {
+  if (outcome === 'passed') return 'clear'
+  if (outcome === 'couldnt_run') return 'info'
   if (deviceStatus === 'threat') return 'threat'
   return 'warning'
 }
 
-/** Map intel provider findings onto related probe finding ids when possible. */
-const INTEL_TO_PROBE = {
-  intel_frida: 'automation_bots',
-  intel_yara: 'clipboard_status',
-  intel_clamav: 'clipboard_status',
-  intel_google_safe_browsing: 'public_ip_geo',
-  intel_virustotal: 'public_ip_geo',
-  intel_scamsniffer: 'wallet_injection',
-  intel_blockaid: 'wallet_injection',
-  intel_phishtank: 'public_ip_geo',
+function intelRow(intel, provider, ranAt) {
+  const skipped = Boolean(provider?.skipped) || intel.outcome === 'couldnt_run'
+  const failed = Boolean(provider && provider.ok === false && !provider?.skipped)
+  const malicious = Boolean(provider?.data?.malicious) || intel.status === 'threat'
+  const feed = intel.checkedAgainst || intel.title || provider?.provider || 'threat feed'
+  const checkedAt = intel.checkedAt || provider?.checkedAt || ranAt || ''
+  let outcome = 'couldnt_run'
+  if (!skipped && !failed) outcome = malicious ? 'failed' : 'passed'
+  else if (failed) outcome = 'couldnt_run'
+
+  const reason = provider?.reason || intel.detail || ''
+  const notConfigured = /not set|not configured/i.test(reason)
+  const evidence = skipped
+    ? notConfigured || !reason
+      ? `${feed} not configured — not checked`
+      : `${feed} not checked — ${reason}`
+    : failed
+      ? `${feed} error${provider?.error ? `: ${provider.error}` : ''}`
+      : `Checked against ${feed}${checkedAt ? ` · ${checkedAt}` : ''}`
+
+  return {
+    id: intel.id,
+    category: intel.category || 'Optional threat intel',
+    title: intel.title,
+    severity: outcome === 'failed' ? intel.severity || 'high' : 'info',
+    status: statusForOutcome(outcome, intel.status),
+    outcome,
+    evidence,
+    detail: skipped
+      ? `${feed} is not configured, so this session was not checked against it. That is not a malware pass.`
+      : intel.detail || evidence,
+    adminDetail: evidence,
+    adminOnly: true,
+    checkedAgainst: skipped ? undefined : feed,
+    checkedAt: skipped ? undefined : checkedAt || undefined,
+    userScore: undefined,
+    deviceResult: {
+      passed: null,
+      skipped: true,
+      failed: false,
+      detail: 'Threat intel is a server-side feed, not a device probe.',
+      value: '',
+      ms: 0,
+    },
+    apiResult: {
+      passed: outcome === 'passed' ? true : outcome === 'failed' ? false : null,
+      skipped,
+      failed: failed && !skipped,
+      detail: evidence,
+      value: skipped ? '' : feed,
+      ms: Math.min(provider?.ms || 0, CHECK_BUDGET_MS),
+      source: 'threat_api',
+    },
+  }
+}
+
+function uaConfirmFinding(probes, requestMeta) {
+  const deviceUa = String(probes.userAgent || '').trim()
+  const serverUa = String(requestMeta.userAgent || '').trim()
+  const confirm = serverConfirmProbe({ id: 'ua_confirm' }, probes, {}, requestMeta)
+  const outcome = confirm.skipped ? 'couldnt_run' : confirm.passed ? 'passed' : 'failed'
+  return {
+    id: 'ua_confirm',
+    category: 'Network & identity',
+    title: 'User-Agent dual-verify',
+    severity: outcome === 'failed' ? 'medium' : 'info',
+    status: statusForOutcome(outcome, 'clear'),
+    outcome,
+    evidence: deviceUa || 'no device UA',
+    detail: confirm.detail,
+    adminDetail: `Device said ${deviceUa || '—'}. Server saw ${serverUa || '—'}.`,
+    adminOnly: true,
+    userScore: undefined,
+    deviceResult: {
+      passed: deviceUa ? true : null,
+      skipped: !deviceUa,
+      failed: false,
+      detail: deviceUa ? `Device said ${deviceUa}` : 'Device did not report a User-Agent.',
+      value: deviceUa,
+      ms: 0,
+    },
+    apiResult: confirm,
+  }
 }
 
 /**
  * Build dual-verified findings for DB + user UI.
- * Admin sees both deviceResult and apiResult on each row.
+ * Recipients use `outcome` + `evidence`. Admin uses deviceResult / apiResult.
+ * Intel rows stay admin-only and labeled; skipped feeds are never a malware pass.
  */
 export function dualVerifyFindings({
   probeFindings = [],
   intelFindings = [],
   probes = {},
   serverGeo = {},
+  requestMeta = {},
   intelResults = [],
 } = {}) {
-  const byProbeId = new Map()
-  const intelByProbe = new Map()
-
-  for (const intel of intelFindings) {
-    const target = INTEL_TO_PROBE[intel.id]
-    if (!target) continue
-    const list = intelByProbe.get(target) || []
-    list.push(intel)
-    intelByProbe.set(target, list)
-  }
-
-  const intelResultByProvider = Object.fromEntries(
-    (intelResults || []).map((r) => [r.provider, r]),
-  )
-
   const findings = []
 
   for (const raw of probeFindings) {
-    // Skip scope notes as dual rows — attach as info partial
     const device = deviceClaimFromFinding(raw)
-    const confirm = serverConfirmProbe(raw, probes, serverGeo)
+    const confirm = serverConfirmProbe(raw, probes, serverGeo, requestMeta)
+    const independent = confirm.source === 'request_ip' || confirm.source === 'request_ua'
 
-    // Optional API overlay for the same probe family
-    const linkedIntel = intelByProbe.get(raw.id) || []
-    let api = {
-      passed: confirm.passed,
-      detail: confirm.detail,
-      failed: confirm.failed,
-      ms: confirm.ms,
-      source: 'server_confirm',
-    }
+    const api = independent
+      ? confirm
+      : notObservable(confirm.ms || 0)
 
-    if (linkedIntel.length) {
-      const first = linkedIntel[0]
-      const providerKey = first.id.replace(/^intel_/, '').replace(/_/g, '_')
-      // Prefer live provider timing when present
-      const providerGuess = Object.keys(intelResultByProvider).find((p) =>
-        first.id.includes(p.replace(/_/g, '')) || first.id.includes(p),
-      )
-      const provider = providerGuess ? intelResultByProvider[providerGuess] : null
-      const intelNeg = isNegative(first.status)
-      const intelPos = isPositive(first.status)
-      const intelFailed = Boolean(provider?.ok === false && !provider?.skipped) || first.status === 'warning' && /error/i.test(first.detail || '')
-      const intelSkipped = Boolean(provider?.skipped)
-
-      if (intelSkipped || intelFailed) {
-        api = {
-          passed: null,
-          detail: first.detail || provider?.reason || 'API check failed or skipped',
-          failed: true,
-          skipped: intelSkipped,
-          ms: Math.min(provider?.ms || 0, CHECK_BUDGET_MS),
-          source: 'threat_api',
-          title: first.title,
-        }
-      } else {
-        api = {
-          passed: intelPos ? true : intelNeg ? false : null,
-          detail: first.detail,
-          failed: api.passed == null && !intelPos && !intelNeg,
-          ms: Math.min(provider?.ms || confirm.ms || 0, CHECK_BUDGET_MS),
-          source: 'threat_api',
-          title: first.title,
-        }
-      }
-      // Also keep server confirm if API wasn't linked tightly — combine: if API ran, use API as second result
-    }
-
-    // Cap reported ms under budget
     device.ms = Math.min(device.ms || 0, CHECK_BUDGET_MS)
     api.ms = Math.min(api.ms || 0, CHECK_BUDGET_MS)
 
-    // Skipped/missing external APIs must not poison the user verdict — server_confirm is enough.
-    if (api.skipped || (api.source === 'threat_api' && api.failed && api.passed == null)) {
-      api = {
-        passed: confirm.passed,
-        detail: confirm.detail,
-        failed: confirm.failed,
-        skipped: false,
-        ms: confirm.ms,
-        source: 'server_confirm',
-      }
+    const outcome = raw.outcome || (device.skipped ? 'couldnt_run' : device.passed === false ? 'failed' : 'passed')
+    const userScore = userScoreForOutcome(outcome, raw.severity)
+    const status = statusForOutcome(outcome, raw.status)
+
+    let adminDetail = raw.adminDetail || raw.detail
+    if (independent) {
+      adminDetail = api.detail
+    } else if (api.skipped) {
+      adminDetail = `${raw.detail} Server cannot independently observe this — device measurement only.`
     }
 
-    const verdict = resolveVerdict(device.passed, api.passed, device.failed, api.failed)
-    const userScore = userScoreForVerdict(verdict, raw.severity)
-    const status = statusForVerdict(verdict, raw.status)
-
-    const adminDetail =
-      verdict === 'positive'
-        ? `${raw.detail} Dual-confirmed (device + ${api.source === 'threat_api' ? 'API' : 'server'}).`
-        : verdict === 'negative'
-          ? `${raw.detail} Dual-confirmed negative.`
-          : `${raw.detail} Partial — device and ${api.source === 'threat_api' ? 'API' : 'server'} did not fully agree, or one side failed.`
-
-    const row = {
+    findings.push({
       id: raw.id,
       category: raw.category,
       title: raw.title,
-      severity:
-        verdict === 'negative'
-          ? raw.severity === 'info'
-            ? 'medium'
-            : raw.severity
-          : verdict === 'partial'
-            ? 'medium'
-            : 'info',
+      severity: raw.severity || 'info',
       status,
-      verdict,
+      verdict:
+        outcome === 'passed' ? 'positive' : outcome === 'failed' ? 'negative' : 'partial',
+      outcome,
+      evidence: raw.evidence || '',
       userScore,
-      // Recipient UI: clean probe wording only (no key/API jargon).
       detail: raw.detail,
       adminDetail,
+      adminOnly: Boolean(raw.adminOnly),
       deviceResult: {
         passed: device.passed,
         detail: device.detail,
+        value: device.value,
         failed: Boolean(device.failed),
+        skipped: Boolean(device.skipped),
         ms: device.ms || 0,
       },
       apiResult: {
         passed: api.passed,
         detail: api.detail,
+        value: api.value,
         failed: Boolean(api.failed),
         skipped: Boolean(api.skipped),
         ms: api.ms || 0,
         source: api.source,
         title: api.title,
       },
-    }
-
-    byProbeId.set(raw.id, row)
-    findings.push(row)
+    })
   }
 
-  // Unpaired intel rows are admin-only. Skip entirely when the provider was skipped
-  // (missing key) so recipients never see “Google Safe Browsing not set” style noise.
+  findings.push(uaConfirmFinding(probes, requestMeta))
+
+  const ranAt = intelResults.find((r) => r.checkedAt)?.checkedAt
   for (const intel of intelFindings) {
-    if (INTEL_TO_PROBE[intel.id] && byProbeId.has(INTEL_TO_PROBE[intel.id])) continue
-
     const provider = (intelResults || []).find(
-      (r) => intel.id.includes(r.provider?.replace(/_/g, '')) || intel.id.endsWith(r.provider),
+      (r) =>
+        intel.id === `intel_${r.provider}` ||
+        intel.id.includes(String(r.provider || '').replace(/_/g, '')) ||
+        intel.id.endsWith(r.provider),
     )
-    if (provider?.skipped) continue
+    findings.push(intelRow(intel, provider, ranAt))
+  }
 
-    const apiFailed = Boolean(provider && provider.ok === false)
-    const apiPassed = apiFailed
-      ? null
-      : isNegative(intel.status)
-        ? false
-        : isPositive(intel.status)
-          ? true
-          : null
-
-    let device = { passed: null, detail: 'No paired device probe for this API check', failed: true, ms: 0 }
-    if (intel.id.includes('frida')) {
-      const hooked = Boolean(probes.frida?.hooked || probes.frida?.detected)
-      device = {
-        passed: !hooked,
-        detail: hooked ? 'Device reported Frida/instrumentation' : 'Device reported no Frida hooks',
-        failed: false,
-        ms: 0,
-      }
-    } else if (intel.id.includes('yara') || intel.id.includes('clamav')) {
-      const c = probes.clipboard || {}
-      const s = probes.storage || {}
-      const bad =
-        c.lookedLikeSeed ||
-        c.lookedLikePrivateKey ||
-        c.lookedLikeApiKey ||
-        (s.seedLikeHits || 0) > 0 ||
-        (s.privateKeyLikeHits || 0) > 0
-      device = {
-        passed: !bad,
-        detail: bad ? 'Device probe flagged secret-like patterns' : 'Device probe found no secret-like patterns',
-        failed: false,
-        ms: 0,
-      }
-    } else if (probes.publicIp || serverGeo.ip) {
-      device = {
-        passed: true,
-        detail: `Device session IP ${probes.publicIp || serverGeo.ip} available for intel correlation`,
-        failed: false,
-        ms: 0,
-      }
-    }
-
-    const verdict = resolveVerdict(device.passed, apiPassed, device.failed, apiFailed || apiPassed == null)
-    const userScore = userScoreForVerdict(verdict, intel.severity)
-    findings.push({
-      id: intel.id,
-      category: intel.category,
-      title: intel.title,
-      severity: verdict === 'negative' ? intel.severity || 'high' : verdict === 'partial' ? 'medium' : 'info',
-      status: statusForVerdict(verdict, intel.status),
-      verdict,
-      userScore,
-      detail: intel.detail,
-      adminDetail: intel.detail,
-      adminOnly: true,
-      deviceResult: device,
-      apiResult: {
-        passed: apiPassed,
-        detail: intel.detail,
-        failed: Boolean(apiFailed || apiPassed == null),
-        skipped: Boolean(provider?.skipped),
-        ms: Math.min(provider?.ms || 0, CHECK_BUDGET_MS),
-        source: 'threat_api',
-      },
-    })
+  // Label skipped providers that never produced a finding so admin never infers a pass.
+  const covered = new Set(findings.filter((f) => f.id.startsWith('intel_')).map((f) => f.id))
+  for (const r of intelResults || []) {
+    const id = `intel_${r.provider}`
+    if (covered.has(id)) continue
+    covered.add(id)
+    const feed = r.provider || 'feed'
+    const skipped = Boolean(r.skipped) || r.ok === false
+    findings.push(
+      intelRow(
+        {
+          id,
+          category: 'Optional threat intel',
+          title: feed,
+          outcome: skipped ? 'couldnt_run' : r.data?.malicious ? 'failed' : 'passed',
+          status: skipped ? 'info' : r.data?.malicious ? 'threat' : 'clear',
+          detail: r.reason || r.error || '',
+          checkedAgainst: skipped ? undefined : feed,
+          checkedAt: r.checkedAt,
+        },
+        r,
+        r.checkedAt,
+      ),
+    )
   }
 
   return findings
 }
 
 export function summarizeDual(findings = []) {
+  const visible = findings.filter((f) => !f.adminOnly && !String(f.id || '').startsWith('intel_'))
+  const outcomeOf = (f) =>
+    f.outcome ||
+    (f.verdict === 'negative' || f.status === 'threat' ? 'failed' : f.verdict === 'partial' ? 'couldnt_run' : 'passed')
+  const passed = visible.filter((f) => outcomeOf(f) === 'passed')
+  const failed = visible.filter((f) => outcomeOf(f) === 'failed')
+  const couldntRun = visible.filter((f) => outcomeOf(f) === 'couldnt_run')
+  const scored = [...passed, ...failed]
+  const scoredPoints = scored
+    .map((f) => (typeof f.userScore === 'number' ? f.userScore : outcomeOf(f) === 'passed' ? 70 : 40))
+    .filter((n) => Number.isFinite(n))
+
   return {
-    total: findings.length,
-    clear: findings.filter((f) => f.verdict === 'positive' || f.status === 'clear').length,
-    warning: findings.filter((f) => f.verdict === 'partial' || f.status === 'partial' || f.status === 'warning').length,
-    threat: findings.filter((f) => f.verdict === 'negative' || f.status === 'threat').length,
-    positive: findings.filter((f) => f.verdict === 'positive').length,
-    negative: findings.filter((f) => f.verdict === 'negative').length,
-    partial: findings.filter((f) => f.verdict === 'partial').length,
-    avgUserScore: findings.length
-      ? Math.round(findings.reduce((n, f) => n + (f.userScore ?? 70), 0) / findings.length)
-      : 70,
+    total: visible.length,
+    passed: passed.length,
+    failed: failed.length,
+    couldntRun: couldntRun.length,
+    scored: scored.length,
+    clear: passed.length,
+    warning: couldntRun.length,
+    threat: failed.length,
+    positive: passed.length,
+    negative: failed.length,
+    partial: couldntRun.length,
+    avgUserScore: scoredPoints.length
+      ? Math.round(scoredPoints.reduce((n, s) => n + s, 0) / scoredPoints.length)
+      : null,
   }
 }

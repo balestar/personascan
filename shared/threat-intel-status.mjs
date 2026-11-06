@@ -11,6 +11,9 @@ function env(name) {
 }
 
 const PROVIDERS = [
+  ['anyapi', 'ANYAPI_API_KEY'],
+  ['urlscan', 'URLSCAN_API_KEY'],
+  ['cloudmersive', 'CLOUDMERSIVE_API_KEY'],
   ['google_safe_browsing', 'GOOGLE_SAFE_BROWSING_API_KEY'],
   ['virustotal', 'VIRUSTOTAL_API_KEY'],
   ['scamsniffer', 'SCAMSNIFFER_API_KEY'],

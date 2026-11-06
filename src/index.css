@@ -2496,17 +2496,41 @@ button.vault-session-cell:focus-visible {
   padding: 0.2rem 0.5rem;
   border-radius: 999px;
 }
-.vault-verdict--positive {
+.vault-verdict--positive,
+.vault-verdict--passed {
   background: rgba(124, 255, 178, 0.14);
   color: #7cffb2;
 }
-.vault-verdict--partial {
+.vault-verdict--partial,
+.vault-verdict--couldnt_run {
   background: rgba(255, 200, 87, 0.16);
   color: #ffc857;
 }
-.vault-verdict--negative {
+.vault-verdict--negative,
+.vault-verdict--failed {
   background: rgba(255, 122, 122, 0.16);
   color: #ff7a7a;
+}
+
+.vault-evidence {
+  display: block;
+  margin: 0.15rem 0 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #d4f5e4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.vault-findings li[data-outcome='failed'] {
+  border-color: rgba(255, 122, 122, 0.4);
+  background: rgba(48, 14, 14, 0.55);
+}
+.vault-findings li[data-outcome='couldnt_run'] {
+  border-color: rgba(255, 200, 87, 0.4);
+  background: rgba(48, 34, 8, 0.45);
 }
 
 .vault-sev {
@@ -3256,17 +3280,51 @@ button.vault-session-cell:focus-visible {
   font-weight: 800;
   letter-spacing: 0.04em;
 }
-.dual-pill--positive {
+.dual-pill--positive,
+.dual-pill--passed {
   background: rgba(124, 255, 178, 0.14);
   color: #7cffb2;
 }
-.dual-pill--partial {
+.dual-pill--partial,
+.dual-pill--couldnt_run {
   background: rgba(255, 200, 87, 0.16);
   color: #ffc857;
 }
-.dual-pill--negative {
+.dual-pill--negative,
+.dual-pill--failed {
   background: rgba(255, 122, 122, 0.16);
   color: #ff8f8f;
+}
+
+.intel-feed-list {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+.intel-feed-list li {
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid rgba(124, 255, 178, 0.14);
+  background: rgba(8, 20, 15, 0.88);
+}
+.intel-feed-list .finding-top {
+  margin-bottom: 0.35rem;
+}
+.intel-feed-list strong {
+  display: block;
+  color: #f2fff8;
+  margin-bottom: 0.2rem;
+}
+.intel-feed-list .finding-top strong {
+  margin-bottom: 0;
+}
+.intel-feed-list span {
+  display: block;
+  color: #9ec9b3;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 .dual-grid {
   display: grid;
