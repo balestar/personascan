@@ -8,6 +8,7 @@ import {
   dbListBlocks,
   dbListSessions,
   dbListUsers,
+  dbUpsertSession,
   dbUpsertUser,
   type DbSession,
   type GeoBlock,
@@ -108,7 +109,12 @@ export async function resolveToken(
 ): Promise<{ user: UserRecord; expiresAt: string; sessionId?: string; session: DbSession } | null> {
   const session = await dbGetSessionByToken(token)
   if (!session) return null
-  if (new Date(session.expiresAt).getTime() < Date.now() && session.status !== 'completed') {
+  const exp = new Date(session.expiresAt).getTime()
+  if (!Number.isFinite(exp) || exp <= Date.now() || session.status === 'expired') {
+    if (session.status !== 'expired' && session.status !== 'blocked') {
+      session.status = 'expired'
+      await dbUpsertSession(session)
+    }
     return null
   }
   const user = await dbGetUser(session.userId)

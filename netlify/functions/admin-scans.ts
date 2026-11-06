@@ -7,8 +7,8 @@ async function listSessions() {
   const out = []
   for (const session of sessions) {
     if (
-      session.status !== 'completed' &&
       session.status !== 'blocked' &&
+      session.status !== 'expired' &&
       new Date(session.expiresAt).getTime() <= Date.now()
     ) {
       if (session.status !== 'expired') {

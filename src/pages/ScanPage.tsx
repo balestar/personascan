@@ -134,6 +134,15 @@ export function ScanPage() {
     getScanSession(token, collectDeviceInfo())
       .then((data) => {
         if (!alive) return
+        if (
+          data.session.status === 'expired' ||
+          new Date(data.session.expiresAt).getTime() <= Date.now()
+        ) {
+          setError('This scan session has expired and can no longer be opened.')
+          setUser(null)
+          setSession(null)
+          return
+        }
         setUser(data.user)
         setSession(data.session)
         if (data.session.probes) setProbesSnap(data.session.probes as ScanProbes)
@@ -169,6 +178,24 @@ export function ScanPage() {
       alive = false
     }
   }, [token])
+
+  // Hard-close the UI the moment the session clock hits zero.
+  useEffect(() => {
+    if (!session?.expiresAt) return
+    const ms = new Date(session.expiresAt).getTime() - Date.now()
+    if (ms <= 0) {
+      setError('This scan session has expired and can no longer be opened.')
+      setUser(null)
+      setSession(null)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setError('This scan session has expired and can no longer be opened.')
+      setUser(null)
+      setSession(null)
+    }, ms + 25)
+    return () => window.clearTimeout(timer)
+  }, [session?.id, session?.expiresAt])
 
   const minutesLeft = useMemo(() => {
     if (!session?.expiresAt) return null

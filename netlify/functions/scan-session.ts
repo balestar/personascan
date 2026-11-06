@@ -75,10 +75,15 @@ export default async (req: Request, context: Context) => {
 
   const { user } = resolved
 
-  if (session.status === 'expired') {
+  if (
+    session.status === 'expired' ||
+    new Date(session.expiresAt).getTime() <= Date.now()
+  ) {
+    session.status = 'expired'
+    await saveSessionRecord(session)
     user.lastScanStatus = 'expired'
     await saveUser(user)
-    return json({ error: 'This scan session expired after 20 minutes.' }, 410)
+    return json({ error: 'This scan session has expired and can no longer be opened.' }, 410)
   }
 
   const ip = clientIpFromRequest(req)
@@ -221,6 +226,12 @@ export default async (req: Request, context: Context) => {
     }
 
     if (action === 'scan') {
+      if (session.status === 'completed' || session.dumpedAt) {
+        return json({ error: 'This scan session is already closed.' }, 409)
+      }
+      if (session.status !== 'pending' && session.status !== 'active') {
+        return json({ error: 'This scan session has expired and can no longer be used.' }, 410)
+      }
       if (!body.acceptedTerms) {
         return badRequest('You must accept the secure scan terms before continuing.')
       }

@@ -92,6 +92,49 @@ async function hashDumpPin(pin: string, sessionId: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+function sessionExpiryMs(session: Json) {
+  const exp = new Date(String(session.expires_at || '')).getTime()
+  return Number.isFinite(exp) ? exp : 0
+}
+
+function isPastExpiry(session: Json) {
+  return sessionExpiryMs(session) <= Date.now()
+}
+
+/** Persist expired status when the clock has passed expires_at. */
+async function closeIfExpired(env: Env, session: Json): Promise<Json> {
+  if (!session) return session
+  if (session.status === 'blocked') return session
+  if (session.status === 'expired') return session
+  if (!isPastExpiry(session)) return session
+  const closedAt = new Date().toISOString()
+  await sb(env, 'personascan_sessions', {
+    method: 'PATCH',
+    query: `?id=eq.${encodeURIComponent(String(session.id))}`,
+    body: JSON.stringify({ status: 'expired' }),
+  })
+  if (session.user_id) {
+    await sb(env, 'personascan_users', {
+      method: 'PATCH',
+      query: `?id=eq.${encodeURIComponent(String(session.user_id))}`,
+      body: JSON.stringify({ last_scan_status: 'expired', last_seen_at: closedAt }),
+    })
+  }
+  return { ...session, status: 'expired' }
+}
+
+/** Recipient token gate — expired / timed-out sessions cannot reopen. */
+async function gateScanSession(env: Env, session: Json): Promise<Response | Json> {
+  const fresh = await closeIfExpired(env, session)
+  if (fresh.status === 'blocked') {
+    return json({ error: 'Access from this network location is blocked by policy.', blocked: true }, 403)
+  }
+  if (fresh.status === 'expired' || isPastExpiry(fresh)) {
+    return json({ error: 'This scan session has expired and can no longer be opened.' }, 410)
+  }
+  return fresh
+}
+
 function mapUser(row: Json) {
   return {
     id: row.id,
@@ -322,7 +365,8 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       ? `?user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc`
       : '?order=created_at.desc'
     const rows = (await sb(env, 'personascan_sessions', { method: 'GET', query: q })) as Json[]
-    return json({ sessions: rows.map(mapSession) })
+    const sessions = await Promise.all(rows.map((s) => closeIfExpired(env, s)))
+    return json({ sessions: sessions.map(mapSession) })
   }
 
   const sessionMatch = path.match(/^\/api\/admin\/sessions\/([^/]+)$/)
@@ -333,7 +377,8 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       query: `?id=eq.${encodeURIComponent(sessionMatch[1])}&limit=1`,
     })) as Json[]
     if (!rows[0]) return json({ error: 'Not found' }, 404)
-    return json({ session: mapSession(rows[0]) })
+    const session = await closeIfExpired(env, rows[0])
+    return json({ session: mapSession(session) })
   }
 
   if (path === '/api/admin/active-scans' && method === 'GET') {
@@ -342,8 +387,15 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       method: 'GET',
       query: '?status=in.(pending,active)&order=created_at.desc',
     })) as Json[]
+    const live: Json[] = []
+    for (const raw of rows) {
+      const s = await closeIfExpired(env, raw)
+      if (s.status !== 'pending' && s.status !== 'active') continue
+      if (isPastExpiry(s)) continue
+      live.push(s)
+    }
     return json({
-      active: rows.map((s) => ({
+      active: live.map((s) => ({
         id: s.id,
         userId: s.user_id,
         userName: s.user_name,
@@ -415,8 +467,12 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       method: 'GET',
       query: `?token=eq.${encodeURIComponent(token)}&limit=1`,
     })) as Json[]
-    const session = rows[0]
-    if (!session) return json({ error: 'Invalid or expired scan link' }, 404)
+    let session = rows[0]
+    if (!session) return json({ error: 'Invalid or expired scan link' }, 410)
+
+    const gated = await gateScanSession(env, session)
+    if (gated instanceof Response) return gated
+    session = gated
 
     if (method === 'GET') {
       return json({
@@ -435,10 +491,14 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       const action = String(body?.action || '')
 
       if (action === 'open') {
+        // Never revive a closed session; only pending → active within TTL.
+        if (session.status !== 'pending' && session.status !== 'active' && session.status !== 'completed') {
+          return json({ error: 'This scan session has expired and can no longer be opened.' }, 410)
+        }
         const patch = {
           status: session.status === 'pending' ? 'active' : session.status,
           opened_at: session.opened_at || new Date().toISOString(),
-          device_name: body?.deviceName || session.device_name,
+          device_name: body?.deviceName || body?.device?.name || session.device_name,
           device: body?.device || session.device,
         }
         await sb(env, 'personascan_sessions', {
@@ -463,7 +523,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
         if (session.dumped_at || summary.dumped) {
           return json({ error: 'This scan was already dumped. The dump key cannot be read again.' }, 409)
         }
-        if (session.status !== 'completed' && session.status !== 'expired') {
+        if (session.status !== 'completed') {
           return json({ error: 'Purge is only available after a completed scan.' }, 400)
         }
         const findings = session.findings as unknown[] | null
@@ -538,6 +598,12 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       }
 
       if (action === 'scan') {
+        if (session.status === 'completed' || session.dumped_at) {
+          return json({ error: 'This scan session is already closed.' }, 409)
+        }
+        if (session.status !== 'pending' && session.status !== 'active') {
+          return json({ error: 'This scan session has expired and can no longer be used.' }, 410)
+        }
         if (!body?.acceptedTerms) return json({ error: 'You must accept the secure scan terms before continuing.' }, 400)
         if (!body?.probes) return json({ error: 'Missing live probe payload. Run the device scanner first.' }, 400)
 

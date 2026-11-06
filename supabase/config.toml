@@ -1,0 +1,5 @@
+# Persona Scan — Supabase (dep3 / hxapjyxzvmouwrhdgmsx)
+project_id = "hxapjyxzvmouwrhdgmsx"
+
+[functions.expire-sessions]
+verify_jwt = false

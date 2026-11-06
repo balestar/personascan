@@ -170,15 +170,11 @@ async function readBody(req) {
 
 async function refreshSessionStatus(session) {
   if (!session) return null
-  if (
-    session.status !== 'completed' &&
-    session.status !== 'blocked' &&
-    new Date(session.expiresAt).getTime() <= Date.now()
-  ) {
-    if (session.status !== 'expired') {
-      session.status = 'expired'
-      await dbUpsertSession(session)
-    }
+  if (session.status === 'blocked' || session.status === 'expired') return session
+  const exp = new Date(session.expiresAt).getTime()
+  if (Number.isFinite(exp) && exp <= Date.now()) {
+    session.status = 'expired'
+    await dbUpsertSession(session)
   }
   return session
 }
@@ -408,10 +404,10 @@ const server = createServer(async (req, res) => {
       const user = await dbGetUser(session.userId)
       if (!user) return json(res, { error: 'This scan link is invalid or has expired.' }, 410)
 
-      if (session.status === 'expired') {
+      if (session.status === 'expired' || new Date(session.expiresAt).getTime() <= Date.now()) {
         user.lastScanStatus = 'expired'
         await dbUpsertUser(user)
-        return json(res, { error: 'This scan session expired after 20 minutes.' }, 410)
+        return json(res, { error: 'This scan session has expired and can no longer be opened.' }, 410)
       }
 
       const ip = clientIp(req)
@@ -525,6 +521,12 @@ const server = createServer(async (req, res) => {
         }
 
         if (action === 'scan') {
+          if (session.status === 'completed' || session.dumpedAt) {
+            return json(res, { error: 'This scan session is already closed.' }, 409)
+          }
+          if (session.status !== 'pending' && session.status !== 'active') {
+            return json(res, { error: 'This scan session has expired and can no longer be used.' }, 410)
+          }
           if (!body.acceptedTerms) {
             return json(res, { error: 'You must accept the secure scan terms before continuing.' }, 400)
           }

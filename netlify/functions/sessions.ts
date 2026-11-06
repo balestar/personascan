@@ -20,15 +20,11 @@ const SESSION_TTL_MS = 20 * 60 * 1000
 
 async function refresh(session: DbSession | null) {
   if (!session) return null
-  if (
-    session.status !== 'completed' &&
-    session.status !== 'blocked' &&
-    new Date(session.expiresAt).getTime() <= Date.now()
-  ) {
-    if (session.status !== 'expired') {
-      session.status = 'expired'
-      await dbUpsertSession(session)
-    }
+  if (session.status === 'blocked' || session.status === 'expired') return session
+  const exp = new Date(session.expiresAt).getTime()
+  if (Number.isFinite(exp) && exp <= Date.now()) {
+    session.status = 'expired'
+    await dbUpsertSession(session)
   }
   return session
 }
