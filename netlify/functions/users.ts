@@ -2,17 +2,15 @@ import type { Config, Context } from '@netlify/functions'
 import {
   badRequest,
   createId,
-  createSecureToken,
   deleteUser,
   json,
   listUsers,
   saveUser,
-  setToken,
   unauthorized,
   verifyAdminKey,
   type UserRecord,
 } from './_shared/store'
-import { siteUrl } from './_shared/scanEngine'
+import { createSession } from './sessions'
 
 function adminFrom(req: Request) {
   return verifyAdminKey(req.headers.get('x-admin-key'))
@@ -22,8 +20,15 @@ export default async (req: Request, _context: Context) => {
   if (!adminFrom(req)) return unauthorized()
 
   if (req.method === 'GET') {
+    const { dbListSessions } = await import('./_shared/supabase')
     const users = await listUsers()
-    return json({ users })
+    const sessions = await dbListSessions()
+    return json({
+      users: users.map((user) => ({
+        ...user,
+        sessionCount: sessions.filter((s) => s.userId === user.id).length,
+      })),
+    })
   }
 
   if (req.method === 'POST') {
@@ -44,26 +49,18 @@ export default async (req: Request, _context: Context) => {
       return badRequest('Enter a valid email address.')
     }
 
-    const now = new Date()
-    const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 14)
-    const token = createSecureToken()
-
     const user: UserRecord = {
       id: createId('usr'),
       name,
       email,
       country,
-      createdAt: now.toISOString(),
-      linkToken: token,
-      linkExpiresAt: expires.toISOString(),
+      createdAt: new Date().toISOString(),
       lastScanStatus: 'pending',
     }
 
     await saveUser(user)
-    await setToken(token, user.id, user.linkExpiresAt!)
-
-    const link = `${siteUrl(req)}/scan/${token}`
-    return json({ user, link }, 201)
+    const session = await createSession(user, req)
+    return json({ user, link: session.link, session }, 201)
   }
 
   if (req.method === 'DELETE') {

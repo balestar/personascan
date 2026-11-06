@@ -1,17 +1,20 @@
-import { getStore } from '@netlify/blobs'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
+import {
+  dbDeleteBlock,
+  dbDeleteUser,
+  dbGetSessionByToken,
+  dbGetUser,
+  dbInsertBlock,
+  dbListBlocks,
+  dbListSessions,
+  dbListUsers,
+  dbUpsertUser,
+  type DbSession,
+  type GeoBlock,
+  type UserRecord,
+} from './supabase'
 
-export type UserRecord = {
-  id: string
-  name: string
-  email: string
-  country: string
-  createdAt: string
-  linkToken?: string
-  linkExpiresAt?: string
-  lastScanAt?: string
-  lastScanStatus?: 'pending' | 'completed' | 'failed'
-}
+export type { GeoBlock, UserRecord }
 
 export type ScanFinding = {
   id: string
@@ -22,9 +25,22 @@ export type ScanFinding = {
   detail: string
 }
 
+export type GeoInfo = {
+  ip: string
+  country?: string
+  countryCode?: string
+  region?: string
+  city?: string
+  lat?: number
+  lon?: number
+  isp?: string
+}
+
 export type ScanResult = {
   id: string
   userId: string
+  userName?: string
+  userEmail?: string
   token: string
   startedAt: string
   completedAt: string
@@ -35,18 +51,7 @@ export type ScanResult = {
     warning: number
     threat: number
   }
-}
-
-function usersStore() {
-  return getStore({ name: 'personascan-users', consistency: 'strong' })
-}
-
-function scansStore() {
-  return getStore({ name: 'personascan-scans', consistency: 'strong' })
-}
-
-function tokensStore() {
-  return getStore({ name: 'personascan-tokens', consistency: 'strong' })
+  geo?: GeoInfo
 }
 
 export function createId(prefix: string) {
@@ -72,63 +77,139 @@ export function verifyAdminKey(provided: string | null) {
 }
 
 export async function listUsers(): Promise<UserRecord[]> {
-  const store = usersStore()
-  const { blobs } = await store.list()
-  const users: UserRecord[] = []
-  for (const blob of blobs) {
-    const user = await store.get(blob.key, { type: 'json' })
-    if (user) users.push(user as UserRecord)
-  }
-  return users.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return dbListUsers()
 }
 
 export async function getUser(id: string): Promise<UserRecord | null> {
-  return (await usersStore().get(id, { type: 'json' })) as UserRecord | null
+  return dbGetUser(id)
 }
 
 export async function saveUser(user: UserRecord) {
-  await usersStore().setJSON(user.id, user)
-  return user
+  return dbUpsertUser(user)
 }
 
 export async function deleteUser(id: string) {
-  const user = await getUser(id)
-  if (user?.linkToken) {
-    await tokensStore().delete(user.linkToken)
+  await dbDeleteUser(id)
+}
+
+/** @deprecated tokens live on sessions.token — kept for call-site compatibility */
+export async function setToken(
+  _token: string,
+  _userId: string,
+  _expiresAt: string,
+  _sessionId?: string,
+) {
+  return
+}
+
+export async function resolveToken(
+  token: string,
+): Promise<{ user: UserRecord; expiresAt: string; sessionId?: string; session: DbSession } | null> {
+  const session = await dbGetSessionByToken(token)
+  if (!session) return null
+  if (new Date(session.expiresAt).getTime() < Date.now() && session.status !== 'completed') {
+    return null
   }
-  await usersStore().delete(id)
-}
-
-export async function setToken(token: string, userId: string, expiresAt: string) {
-  await tokensStore().setJSON(token, { userId, expiresAt })
-}
-
-export async function resolveToken(token: string): Promise<{ user: UserRecord; expiresAt: string } | null> {
-  const entry = (await tokensStore().get(token, { type: 'json' })) as
-    | { userId: string; expiresAt: string }
-    | null
-  if (!entry) return null
-  if (new Date(entry.expiresAt).getTime() < Date.now()) return null
-  const user = await getUser(entry.userId)
+  const user = await dbGetUser(session.userId)
   if (!user) return null
-  return { user, expiresAt: entry.expiresAt }
+  return { user, expiresAt: session.expiresAt, sessionId: session.id, session }
 }
 
-export async function saveScan(result: ScanResult) {
-  await scansStore().setJSON(result.id, result)
-  return result
+export async function listScans(): Promise<ScanResult[]> {
+  const sessions = await dbListSessions()
+  return sessions
+    .filter((s) => s.status === 'completed' && s.findings)
+    .map((s) => ({
+      id: s.id,
+      userId: s.userId,
+      userName: s.userName,
+      userEmail: s.userEmail,
+      token: s.token,
+      startedAt: s.openedAt || s.createdAt,
+      completedAt: s.completedAt || s.createdAt,
+      findings: s.findings as ScanFinding[],
+      summary: s.summary as ScanResult['summary'],
+      geo: s.geo as GeoInfo | undefined,
+    }))
 }
 
-export async function getScanForUser(userId: string): Promise<ScanResult | null> {
-  const store = scansStore()
-  const { blobs } = await store.list()
-  let latest: ScanResult | null = null
-  for (const blob of blobs) {
-    const scan = (await store.get(blob.key, { type: 'json' })) as ScanResult | null
-    if (!scan || scan.userId !== userId) continue
-    if (!latest || scan.completedAt > latest.completedAt) latest = scan
+export async function listBlocks(): Promise<GeoBlock[]> {
+  return dbListBlocks()
+}
+
+export async function saveBlock(block: GeoBlock) {
+  return dbInsertBlock(block)
+}
+
+export async function deleteBlock(id: string) {
+  await dbDeleteBlock(id)
+}
+
+export async function isGeoBlocked(ip: string, countryCode?: string) {
+  const blocks = await listBlocks()
+  return blocks.some((block) => {
+    if (block.type === 'ip') return block.value === ip
+    if (block.type === 'country') return block.value.toUpperCase() === (countryCode || '').toUpperCase()
+    return false
+  })
+}
+
+export function clientIpFromRequest(req: Request) {
+  const forwarded = req.headers.get('x-forwarded-for')
+  if (forwarded) return forwarded.split(',')[0].trim()
+  const realIp = req.headers.get('x-nf-client-connection-ip') || req.headers.get('client-ip')
+  return realIp || '0.0.0.0'
+}
+
+export async function lookupGeo(ip: string): Promise<GeoInfo> {
+  // Never invent coordinates — localhost / private IPs have no public street location.
+  if (
+    !ip ||
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === '0.0.0.0' ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)
+  ) {
+    return {
+      ip,
+      country: 'Local',
+      countryCode: 'LO',
+      region: 'Development',
+      city: 'Localhost',
+      isp: 'Local / private network',
+    }
   }
-  return latest
+  try {
+    const res = await fetch(
+      `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,countryCode,regionName,city,lat,lon,isp,query`,
+    )
+    const data = (await res.json()) as {
+      status: string
+      country?: string
+      countryCode?: string
+      regionName?: string
+      city?: string
+      lat?: number
+      lon?: number
+      isp?: string
+      query?: string
+    }
+    if (data.status !== 'success') return { ip }
+    return {
+      ip: data.query || ip,
+      country: data.country,
+      countryCode: data.countryCode,
+      region: data.regionName,
+      city: data.city,
+      lat: typeof data.lat === 'number' ? data.lat : undefined,
+      lon: typeof data.lon === 'number' ? data.lon : undefined,
+      isp: data.isp,
+    }
+  } catch {
+    return { ip }
+  }
 }
 
 export function json(data: unknown, status = 200) {

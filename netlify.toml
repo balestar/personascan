@@ -6,6 +6,11 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# Persona Scan DB: https://hxapjyxzvmouwrhdgmsx.supabase.co (tables personascan_*)
+# Netlify env: SUPABASE_URL, SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY, ADMIN_KEY,
+# SCAN_SITE_URL=https://secure.personascan.net (generated /scan links)
+# Marketing site: personascan.net
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

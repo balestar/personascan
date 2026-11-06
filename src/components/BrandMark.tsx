@@ -1,21 +1,33 @@
+/** Green glowing eye mark — no background plate, no padlock. */
 export function BrandMark({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
-  const dim = size === 'lg' ? 48 : size === 'sm' ? 28 : 36
+  const dim = size === 'lg' ? 56 : size === 'sm' ? 30 : 38
+  const gid = `ps-eye-${size}`
   return (
     <div className={`brand-mark brand-mark--${size}`} aria-hidden>
-      <svg width={dim} height={dim} viewBox="0 0 48 48" fill="none">
-        <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#ps-grad)" />
-        <path
-          d="M24 12c-5.5 0-10 3.2-10 8.2 0 3.4 2.1 6.2 5.2 7.5L16 36h16l-3.2-8.3c3.1-1.3 5.2-4.1 5.2-7.5C34 15.2 29.5 12 24 12Z"
-          fill="#0B1210"
-          opacity="0.92"
-        />
-        <circle cx="24" cy="20" r="3.2" fill="#7CFFB2" />
+      <svg width={dim} height={dim} viewBox="0 0 64 40" fill="none">
         <defs>
-          <linearGradient id="ps-grad" x1="6" y1="4" x2="42" y2="44" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#7CFFB2" />
-            <stop offset="1" stopColor="#2BD4A8" />
+          <linearGradient id={gid} x1="4" y1="20" x2="60" y2="20" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#0f7a52" />
+            <stop offset="0.45" stopColor="#3dffb0" />
+            <stop offset="1" stopColor="#b6ffd9" />
           </linearGradient>
+          <filter id={`${gid}-glow`} x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="2.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
+        {/* Eye outline — transparent outside, green glow */}
+        <path
+          d="M2 20C10 8 22 4 32 4s22 4 30 16c-8 12-20 16-30 16S10 32 2 20Z"
+          fill={`url(#${gid})`}
+          filter={`url(#${gid}-glow)`}
+        />
+        <circle cx="32" cy="20" r="9.5" fill="#04140e" />
+        <circle cx="32" cy="20" r="5.2" fill="#7cffb2" />
+        <circle cx="34.2" cy="17.8" r="1.6" fill="#e8fff4" opacity="0.9" />
       </svg>
     </div>
   )

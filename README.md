@@ -1,6 +1,7 @@
 # Persona Scan
 
 Secured device threat scans for [personascan.net](https://personascan.net).
+Scan invites open on [secure.personascan.net](https://secure.personascan.net).
 
 Admins create users (name, email, country), generate a secured invite link, and send it to the recipient. The recipient opens the link, accepts the secure-scan terms, taps **Fetch scan**, and receives a report covering IP leaks, password leaks, unknown API traffic, personal-data apps, ads SDKs, bots, cryptographic posture, and related categories.
 
@@ -27,8 +28,8 @@ pnpm dev
 ## Deploy (Netlify)
 
 1. Connect this repo to Netlify (or `npx netlify deploy`).
-2. Set environment variable `ADMIN_KEY` (and optionally `SITE_URL=https://personascan.net`).
-3. Attach custom domain `personascan.net`.
+2. Set `ADMIN_KEY` and `SCAN_SITE_URL=https://secure.personascan.net` (scan links only).
+3. Attach marketing domain `personascan.net` and scan host `secure.personascan.net`.
 
 ## Admin flow
 

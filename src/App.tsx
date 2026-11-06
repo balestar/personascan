@@ -9,6 +9,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/admin" element={<AdminPage />} />
+        <Route path="/scan" element={<Navigate to="/" replace />} />
         <Route path="/scan/:token" element={<ScanPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -1,21 +1,55 @@
 import { createServer } from 'node:http'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, writeFile, readdir, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { buildFindingsFromProbes } from '../shared/findings-from-probes.mjs'
+import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
+import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
+import {
+  dbDeleteBlock,
+  dbDeleteUser,
+  dbGetSession,
+  dbGetSessionByToken,
+  dbGetUser,
+  dbInsertBlock,
+  dbListBlocks,
+  dbListSessions,
+  dbListUsers,
+  dbUpsertSession,
+  dbUpsertUser,
+} from './supabase.mjs'
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url))
-const root = join(__dirname, '..', '.data')
-const usersDir = join(root, 'users')
-const tokensDir = join(root, 'tokens')
-const scansDir = join(root, 'scans')
 const ADMIN_KEY = process.env.ADMIN_KEY || 'personascan-admin'
 const PORT = Number(process.env.API_PORT || 8888)
-const SITE_URL = process.env.SITE_URL || 'http://localhost:5173'
+/** Scan invite links — production uses secure.personascan.net (not marketing domain). */
+const SITE_URL =
+  process.env.SCAN_SITE_URL ||
+  process.env.SECURE_SITE_URL ||
+  process.env.SITE_URL ||
+  'http://localhost:5173'
+const SESSION_TTL_MS = 20 * 60 * 1000
 
-await mkdir(usersDir, { recursive: true })
-await mkdir(tokensDir, { recursive: true })
-await mkdir(scansDir, { recursive: true })
+function hashDumpPin(pin, sessionId) {
+  return createHash('sha256').update(`${sessionId}:${pin}`).digest('hex')
+}
+
+function makeDumpPin() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz'
+  let out = ''
+  for (let i = 0; i < 10; i++) out += alphabet[randomInt(0, alphabet.length)]
+  return out
+}
+
+/** Never expose dump pin hash (or wiped probe payload) to clients. */
+function publicSession(session) {
+  if (!session) return session
+  const summary = session.summary ? { ...session.summary } : undefined
+  if (summary && 'dumpPinHash' in summary) delete summary.dumpPinHash
+  return {
+    ...session,
+    summary,
+    dumpPinHash: undefined,
+    dumpedAt: session.dumpedAt || summary?.dumpedAt,
+  }
+}
 
 function json(res, data, status = 200) {
   res.writeHead(status, {
@@ -45,177 +79,81 @@ function verifyAdmin(req) {
   return timingSafeEqual(a, b)
 }
 
-async function readJson(path) {
+function clientIp(req) {
+  const forwarded = req.headers['x-forwarded-for']
+  if (typeof forwarded === 'string' && forwarded.length) return forwarded.split(',')[0].trim()
+  return req.socket.remoteAddress?.replace('::ffff:', '') || '127.0.0.1'
+}
+
+async function lookupGeo(ip) {
+  // Never invent coordinates — private/local IPs have no public street location.
+  if (
+    !ip ||
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === '0.0.0.0' ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)
+  ) {
+    return {
+      ip,
+      country: 'Local',
+      countryCode: 'LO',
+      region: 'Development',
+      city: 'Localhost',
+      isp: 'Local / private network',
+    }
+  }
   try {
-    return JSON.parse(await readFile(path, 'utf8'))
+    const res = await fetch(
+      `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,countryCode,regionName,city,lat,lon,isp,query`,
+    )
+    const data = await res.json()
+    if (data.status !== 'success') return { ip }
+    return {
+      ip: data.query || ip,
+      country: data.country,
+      countryCode: data.countryCode,
+      region: data.regionName,
+      city: data.city,
+      lat: typeof data.lat === 'number' ? data.lat : undefined,
+      lon: typeof data.lon === 'number' ? data.lon : undefined,
+      isp: data.isp,
+    }
   } catch {
-    return null
+    return { ip }
   }
 }
 
-async function writeJson(path, data) {
-  await writeFile(path, JSON.stringify(data, null, 2))
+async function isBlocked(ip, countryCode) {
+  const blocks = await dbListBlocks()
+  return blocks.some((block) => {
+    if (block.type === 'ip') return block.value === ip
+    if (block.type === 'country') return block.value.toUpperCase() === (countryCode || '').toUpperCase()
+    return false
+  })
 }
 
-async function listUsers() {
-  const files = await readdir(usersDir)
-  const users = []
-  for (const file of files) {
-    const user = await readJson(join(usersDir, file))
-    if (user) users.push(user)
-  }
-  return users.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-}
+function detectDeviceName(ua = '', platform = '') {
+  let device = 'Unknown device'
+  if (/iPhone/i.test(ua)) device = 'iPhone'
+  else if (/iPad/i.test(ua)) device = 'iPad'
+  else if (/Android/i.test(ua) && /Mobile/i.test(ua)) device = 'Android phone'
+  else if (/Android/i.test(ua)) device = 'Android tablet'
+  else if (/Macintosh|Mac OS X/i.test(ua)) device = 'Mac'
+  else if (/Windows/i.test(ua)) device = 'Windows PC'
+  else if (/CrOS/i.test(ua)) device = 'Chromebook'
+  else if (/Linux/i.test(ua)) device = 'Linux device'
+  else if (platform) device = platform
 
-function chance(pct) {
-  return Math.random() * 100 < pct
-}
+  let browser = 'Browser'
+  if (/Edg\//i.test(ua)) browser = 'Edge'
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome'
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari'
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox'
 
-function buildFindings({ email, country, userAgent, clientHints }) {
-  const domain = email.split('@')[1] || 'unknown'
-  const ua = (userAgent || '').toLowerCase()
-  const findings = []
-
-  const webrtcLeak = Boolean(clientHints?.webrtcLeak)
-  findings.push({
-    id: 'ip_leak',
-    category: 'IP Leaks',
-    title: 'WebRTC / network identity exposure',
-    severity: webrtcLeak ? 'high' : 'info',
-    status: webrtcLeak ? 'warning' : 'clear',
-    detail: webrtcLeak
-      ? 'Local network address candidates were observable during the WebRTC probe. VPN/proxy split tunneling may be leaking your real IP.'
-      : 'No local ICE candidate leak detected in this browser session. Public IP remains limited to standard egress.',
-  })
-
-  const passwordRisk = /gmail|yahoo|hotmail|outlook|icloud|proton/i.test(domain) ? chance(35) : chance(18)
-  findings.push({
-    id: 'password_leaks',
-    category: 'Password Leaks',
-    title: 'Credential exposure surface',
-    severity: passwordRisk ? 'critical' : 'low',
-    status: passwordRisk ? 'threat' : 'clear',
-    detail: passwordRisk
-      ? `Address ${email} matches patterns commonly seen in public breach corpora. Rotate passwords and enable passkeys or hardware 2FA.`
-      : `No high-confidence public breach signal for ${email} in this pass. Continue using unique passwords per service.`,
-  })
-
-  const unknownApi = chance(40)
-  findings.push({
-    id: 'unknown_api',
-    category: 'Unknown API Traffic',
-    title: 'Unsigned / opaque API callers',
-    severity: unknownApi ? 'medium' : 'info',
-    status: unknownApi ? 'warning' : 'clear',
-    detail: unknownApi
-      ? 'Background fetch patterns resemble undocumented third-party endpoints requesting device and locale metadata without a clear publisher identity.'
-      : 'No opaque third-party API callers exceeded the baseline for this session.',
-  })
-
-  const prApps = chance(25)
-  findings.push({
-    id: 'pull_request_apps',
-    category: 'Pull Request / Dev Apps',
-    title: 'Developer integrations with personal scopes',
-    severity: prApps ? 'medium' : 'info',
-    status: prApps ? 'warning' : 'clear',
-    detail: prApps
-      ? 'OAuth-like scopes associated with CI/review bots appear able to read personal profile fields. Audit connected developer apps.'
-      : 'No elevated developer-app scopes with personal data access were flagged.',
-  })
-
-  const personalData = chance(45)
-  findings.push({
-    id: 'personal_data_apps',
-    category: 'Personal Data Exfiltration',
-    title: 'Apps transmitting personal identifiers',
-    severity: personalData ? 'high' : 'low',
-    status: personalData ? 'threat' : 'clear',
-    detail: personalData
-      ? `One or more installed-context signals suggest personal fields (name, locale, ${country}) being bundled into analytics beacons.`
-      : 'Personal identifier transmission stayed within expected first-party boundaries.',
-  })
-
-  const adsHit = chance(55)
-  findings.push({
-    id: 'ads_applications',
-    category: 'Ads Applications',
-    title: 'Advertising SDK fingerprinting',
-    severity: adsHit ? 'medium' : 'info',
-    status: adsHit ? 'warning' : 'clear',
-    detail: adsHit
-      ? 'Ad tech scripts attempted cross-site identifiers and interest profiling. Consider tracker blocking or stricter privacy mode.'
-      : 'Advertising SDK activity was minimal or blocked in this environment.',
-  })
-
-  const botHit = /headless|phantom|selenium|puppeteer|playwright/i.test(ua) || chance(12)
-  findings.push({
-    id: 'bots',
-    category: 'Bots',
-    title: 'Automated client / bot indicators',
-    severity: botHit ? 'high' : 'info',
-    status: botHit ? 'warning' : 'clear',
-    detail: botHit
-      ? 'Automation fingerprints were present in the user agent or behavior profile. Treat this session as potentially non-human.'
-      : 'Session behavior aligns with an interactive human browser profile.',
-  })
-
-  findings.push({
-    id: 'crypto_scan',
-    category: 'Cryptographic Scan',
-    title: 'TLS / crypto posture',
-    severity: 'info',
-    status: 'clear',
-    detail:
-      'Transport expected to negotiate modern TLS. No weak cipher suite indicators were observed from the client handshake metadata available to this scan.',
-  })
-
-  const fingerprint = chance(30)
-  findings.push({
-    id: 'tracker_canvas',
-    category: 'Fingerprinting',
-    title: 'Canvas / font fingerprint pressure',
-    severity: fingerprint ? 'medium' : 'low',
-    status: fingerprint ? 'warning' : 'clear',
-    detail: fingerprint
-      ? 'Scripts probed rendering and font metrics in a pattern used for persistent device fingerprinting.'
-      : 'No aggressive canvas/font fingerprint probes exceeded baseline.',
-  })
-
-  const permissions = chance(20)
-  findings.push({
-    id: 'permission_abuse',
-    category: 'Permission Surface',
-    title: 'Sensitive permission requests',
-    severity: permissions ? 'high' : 'info',
-    status: permissions ? 'warning' : 'clear',
-    detail: permissions
-      ? 'Recent permission prompts (camera, mic, or notifications) originated from domains with weak reputation signals.'
-      : 'No suspicious permission escalation attempts were recorded for this scan window.',
-  })
-
-  const dnsLeak = chance(22)
-  findings.push({
-    id: 'dns_leak',
-    category: 'DNS Leaks',
-    title: 'Resolver / DNS privacy',
-    severity: dnsLeak ? 'medium' : 'info',
-    status: dnsLeak ? 'warning' : 'clear',
-    detail: dnsLeak
-      ? `DNS resolution path may bypass your configured privacy DNS for locale ${clientHints?.language || 'unknown'}. Verify DoH/DoT settings.`
-      : 'DNS privacy configuration appears consistent with the expected resolver path.',
-  })
-
-  return findings
-}
-
-function summarize(findings) {
-  return {
-    total: findings.length,
-    clear: findings.filter((f) => f.status === 'clear').length,
-    warning: findings.filter((f) => f.status === 'warning').length,
-    threat: findings.filter((f) => f.status === 'threat').length,
-  }
+  return `${device} · ${browser}`
 }
 
 async function readBody(req) {
@@ -229,20 +167,48 @@ async function readBody(req) {
   }
 }
 
-async function latestScan(userId) {
-  const files = await readdir(scansDir)
-  let latest = null
-  for (const file of files) {
-    const scan = await readJson(join(scansDir, file))
-    if (!scan || scan.userId !== userId) continue
-    if (!latest || scan.completedAt > latest.completedAt) latest = scan
+async function refreshSessionStatus(session) {
+  if (!session) return null
+  if (
+    session.status !== 'completed' &&
+    session.status !== 'blocked' &&
+    new Date(session.expiresAt).getTime() <= Date.now()
+  ) {
+    if (session.status !== 'expired') {
+      session.status = 'expired'
+      await dbUpsertSession(session)
+    }
   }
-  return latest
+  return session
+}
+
+async function createSessionForUser(user) {
+  const now = new Date()
+  const token = createSecureToken()
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString()
+  const session = {
+    id: createId('ses'),
+    userId: user.id,
+    userName: user.name,
+    userEmail: user.email,
+    userCountry: user.country,
+    token,
+    title: 'Awaiting device',
+    status: 'pending',
+    createdAt: now.toISOString(),
+    expiresAt,
+    link: `${SITE_URL}/scan/${token}`,
+  }
+  await dbUpsertSession(session)
+  user.linkToken = token
+  user.linkExpiresAt = expiresAt
+  user.lastScanStatus = 'pending'
+  await dbUpsertUser(user)
+  return session
 }
 
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, { ok: true })
-
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
   try {
@@ -250,14 +216,30 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const key = body?.key || req.headers['x-admin-key']
       if (key !== ADMIN_KEY) return json(res, { error: 'Unauthorized' }, 401)
-      return json(res, { ok: true })
+      return json(res, {
+        ok: true,
+        database: 'supabase:personascan_*',
+        threatIntel: threatIntelStatus(),
+      })
+    }
+
+    if (url.pathname === '/api/admin/threat-intel' && req.method === 'GET') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      return json(res, { providers: threatIntelStatus() })
     }
 
     if (url.pathname === '/api/users') {
       if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
 
       if (req.method === 'GET') {
-        return json(res, { users: await listUsers() })
+        const users = await dbListUsers()
+        const sessions = await dbListSessions()
+        return json(res, {
+          users: users.map((user) => ({
+            ...user,
+            sessionCount: sessions.filter((s) => s.userId === user.id).length,
+          })),
+        })
       }
 
       if (req.method === 'POST') {
@@ -268,35 +250,23 @@ const server = createServer(async (req, res) => {
         if (!name || !email || !country) {
           return json(res, { error: 'Name, email, and country are required.' }, 400)
         }
-        const now = new Date()
-        const expires = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-        const token = createSecureToken()
         const user = {
           id: createId('usr'),
           name,
           email,
           country,
-          createdAt: now.toISOString(),
-          linkToken: token,
-          linkExpiresAt: expires.toISOString(),
+          createdAt: new Date().toISOString(),
           lastScanStatus: 'pending',
         }
-        await writeJson(join(usersDir, `${user.id}.json`), user)
-        await writeJson(join(tokensDir, `${token}.json`), {
-          userId: user.id,
-          expiresAt: user.linkExpiresAt,
-        })
-        return json(res, { user, link: `${SITE_URL}/scan/${token}` }, 201)
+        await dbUpsertUser(user)
+        const session = await createSessionForUser(user)
+        return json(res, { user, link: session.link, session }, 201)
       }
 
       if (req.method === 'DELETE') {
         const id = url.searchParams.get('id')
         if (!id) return json(res, { error: 'User id is required.' }, 400)
-        const user = await readJson(join(usersDir, `${id}.json`))
-        if (user?.linkToken) {
-          await unlink(join(tokensDir, `${user.linkToken}.json`)).catch(() => {})
-        }
-        await unlink(join(usersDir, `${id}.json`)).catch(() => {})
+        await dbDeleteUser(id)
         return json(res, { ok: true })
       }
     }
@@ -304,73 +274,316 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/generate-link' && req.method === 'POST') {
       if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
       const body = await readBody(req)
-      const user = await readJson(join(usersDir, `${body?.userId}.json`))
+      const user = await dbGetUser(body?.userId)
       if (!user) return json(res, { error: 'User not found' }, 404)
-      const days = Math.min(Math.max(body?.daysValid ?? 14, 1), 90)
-      const token = createSecureToken()
-      const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
-      user.linkToken = token
-      user.linkExpiresAt = expiresAt
-      await writeJson(join(usersDir, `${user.id}.json`), user)
-      await writeJson(join(tokensDir, `${token}.json`), { userId: user.id, expiresAt })
-      return json(res, { user, link: `${SITE_URL}/scan/${token}`, expiresAt })
+      const session = await createSessionForUser(user)
+      return json(res, { user, link: session.link, expiresAt: session.expiresAt, session })
+    }
+
+    if (url.pathname === '/api/admin/sessions' && req.method === 'GET') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const userId = url.searchParams.get('userId') || undefined
+      let sessions = await dbListSessions(userId)
+      sessions = await Promise.all(sessions.map((s) => refreshSessionStatus(s)))
+      return json(res, { sessions })
+    }
+
+    const sessionDetail = url.pathname.match(/^\/api\/admin\/sessions\/([^/]+)$/)
+    if (sessionDetail && req.method === 'GET') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const session = await refreshSessionStatus(await dbGetSession(decodeURIComponent(sessionDetail[1])))
+      if (!session) return json(res, { error: 'Session not found' }, 404)
+      return json(res, { session })
+    }
+
+    if (url.pathname === '/api/admin/active-scans' && req.method === 'GET') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const sessions = await dbListSessions()
+      const active = []
+      for (const s of sessions) {
+        const session = await refreshSessionStatus(s)
+        if (session.status === 'pending' || session.status === 'active') {
+          active.push({
+            userId: session.userId,
+            name: session.userName,
+            email: session.userEmail,
+            country: session.userCountry,
+            status: session.status,
+            link: session.link,
+            linkExpiresAt: session.expiresAt,
+            lastSeenAt: session.openedAt,
+            lastIp: session.geo?.ip,
+            sessionId: session.id,
+            title: session.title,
+            deviceName: session.deviceName,
+          })
+        }
+      }
+      return json(res, { active })
+    }
+
+    if (url.pathname === '/api/admin/scans' && req.method === 'GET') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const sessions = await dbListSessions()
+      const scans = sessions
+        .filter((s) => s.status === 'completed' && s.findings)
+        .map((s) => ({
+          id: s.id,
+          userId: s.userId,
+          userName: s.userName,
+          userEmail: s.userEmail,
+          token: s.token,
+          startedAt: s.openedAt || s.createdAt,
+          completedAt: s.completedAt,
+          findings: s.findings,
+          summary: s.summary,
+          geo: s.geo,
+          sessionId: s.id,
+          deviceName: s.deviceName || s.title,
+        }))
+      return json(res, { scans })
+    }
+
+    if (url.pathname === '/api/admin/geo-blocks') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      if (req.method === 'GET') return json(res, { blocks: await dbListBlocks() })
+      if (req.method === 'POST') {
+        const body = await readBody(req)
+        const type = body?.type
+        const value = String(body?.value || '').trim()
+        if (!['country', 'ip'].includes(type) || !value) {
+          return json(res, { error: 'type and value are required.' }, 400)
+        }
+        const block = {
+          id: createId('blk'),
+          type,
+          value: type === 'country' ? value.toUpperCase() : value,
+          label: body?.label,
+          reason: body?.reason,
+          createdAt: new Date().toISOString(),
+        }
+        await dbInsertBlock(block)
+        return json(res, { block }, 201)
+      }
+      if (req.method === 'DELETE') {
+        const id = url.searchParams.get('id')
+        if (!id) return json(res, { error: 'id is required.' }, 400)
+        await dbDeleteBlock(id)
+        return json(res, { ok: true })
+      }
     }
 
     const scanMatch = url.pathname.match(/^\/api\/scan\/([^/]+)$/)
     if (scanMatch) {
       const token = decodeURIComponent(scanMatch[1])
-      const entry = await readJson(join(tokensDir, `${token}.json`))
-      if (!entry || new Date(entry.expiresAt).getTime() < Date.now()) {
-        return json(res, { error: 'This scan link is invalid or has expired.' }, 410)
-      }
-      const user = await readJson(join(usersDir, `${entry.userId}.json`))
+      let session = await refreshSessionStatus(await dbGetSessionByToken(token))
+      if (!session) return json(res, { error: 'This scan link is invalid or has expired.' }, 410)
+      const user = await dbGetUser(session.userId)
       if (!user) return json(res, { error: 'This scan link is invalid or has expired.' }, 410)
+
+      if (session.status === 'expired') {
+        user.lastScanStatus = 'expired'
+        await dbUpsertUser(user)
+        return json(res, { error: 'This scan session expired after 20 minutes.' }, 410)
+      }
+
+      const ip = clientIp(req)
+      const geo = await lookupGeo(ip)
+      if (await isBlocked(ip, geo.countryCode)) {
+        session.status = 'blocked'
+        session.geo = geo
+        await dbUpsertSession(session)
+        user.lastScanStatus = 'blocked'
+        user.lastSeenAt = new Date().toISOString()
+        user.lastIp = ip
+        await dbUpsertUser(user)
+        return json(res, { error: 'Access from this network location is blocked by policy.', blocked: true }, 403)
+      }
 
       if (req.method === 'GET') {
         return json(res, {
           user: { name: user.name, email: user.email, country: user.country },
-          expiresAt: entry.expiresAt,
-          lastScan: await latestScan(user.id),
+          expiresAt: session.expiresAt,
+          session: publicSession(session),
         })
       }
 
       if (req.method === 'POST') {
-        const body = await readBody(req)
-        if (!body?.acceptedTerms) {
-          return json(res, { error: 'You must accept the secure scan terms before continuing.' }, 400)
+        const body = (await readBody(req)) || {}
+        const action = body.action || (body.acceptedTerms ? 'scan' : 'open')
+        const ua = req.headers['user-agent'] || body.device?.userAgent || ''
+        const deviceName =
+          body.device?.name || detectDeviceName(ua, body.device?.platform || body.clientHints?.platform || '')
+
+        if (action === 'open') {
+          session.openedAt = session.openedAt || new Date().toISOString()
+          session.deviceName = deviceName
+          session.title = deviceName
+          session.device = {
+            name: deviceName,
+            userAgent: ua,
+            platform: body.device?.platform,
+            language: body.device?.language,
+            screen: body.device?.screen,
+            timezoneOffset: body.device?.timezoneOffset,
+          }
+          session.geo = { ...geo, ...(body.probes?.ipGeo || {}) }
+          if (session.status === 'pending') session.status = 'active'
+          await dbUpsertSession(session)
+          user.lastSeenAt = session.openedAt
+          user.lastIp = ip
+          user.lastScanStatus = 'active'
+          await dbUpsertUser(user)
+          return json(res, {
+            user: { name: user.name, email: user.email, country: user.country },
+            expiresAt: session.expiresAt,
+            session: publicSession(session),
+          })
         }
-        const startedAt = new Date().toISOString()
-        const findings = buildFindings({
-          email: user.email,
-          country: user.country,
-          userAgent: req.headers['user-agent'],
-          clientHints: body.clientHints,
-        })
-        const completedAt = new Date().toISOString()
-        const scan = {
-          id: createId('scan'),
-          userId: user.id,
-          token,
-          startedAt,
-          completedAt,
-          findings,
-          summary: summarize(findings),
+
+        if (action === 'dump') {
+          if (session.dumpedAt || session.summary?.dumped) {
+            return json(res, { error: 'This scan was already dumped. The dump key cannot be read again.' }, 409)
+          }
+          if (session.status !== 'completed' && session.status !== 'expired') {
+            return json(res, { error: 'Purge is only available after a completed scan.' }, 400)
+          }
+          if (!(session.findings?.length || session.summary?.total || session.completedAt)) {
+            return json(res, { error: 'Nothing to purge on this session.' }, 400)
+          }
+          const dumpPin = makeDumpPin()
+          const dumpedAt = new Date().toISOString()
+          const terminateAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
+          session.findings = []
+          session.probes = undefined
+          session.threatIntel = undefined
+          session.dumpedAt = dumpedAt
+          session.expiresAt = terminateAt
+          session.summary = {
+            total: 0,
+            clear: 0,
+            warning: 0,
+            threat: 0,
+            dumped: true,
+            dumpedAt,
+            terminateAt,
+            dumpPinHash: hashDumpPin(dumpPin, session.id),
+          }
+          await dbUpsertSession(session)
+          user.lastScanStatus = 'completed'
+          user.lastSeenAt = dumpedAt
+          user.linkExpiresAt = terminateAt
+          await dbUpsertUser(user)
+          return json(res, {
+            dumpPin,
+            dumpedAt,
+            terminateAt,
+            message:
+              'Nobody can access your data through this key. Session terminates automatically in 2 minutes.',
+            session: publicSession(session),
+          })
         }
-        await writeJson(join(scansDir, `${scan.id}.json`), scan)
-        user.lastScanAt = completedAt
-        user.lastScanStatus = 'completed'
-        await writeJson(join(usersDir, `${user.id}.json`), user)
-        return json(res, { scan })
+
+        if (action === 'terminate') {
+          if (!session.dumpedAt && !session.summary?.dumped) {
+            return json(res, { error: 'Purge the scan before terminating.' }, 400)
+          }
+          session.status = 'expired'
+          session.expiresAt = new Date().toISOString()
+          await dbUpsertSession(session)
+          user.lastScanStatus = 'expired'
+          user.lastSeenAt = session.expiresAt
+          await dbUpsertUser(user)
+          return json(res, { ok: true, session: publicSession(session) })
+        }
+
+        if (action === 'scan') {
+          if (!body.acceptedTerms) {
+            return json(res, { error: 'You must accept the secure scan terms before continuing.' }, 400)
+          }
+          if (!body.probes) {
+            return json(res, { error: 'Missing live probe payload. Run the device scanner first.' }, 400)
+          }
+
+          const publicIp = body.probes.publicIp || geo.ip
+          let mergedGeo = {
+            ...geo,
+            ...(body.probes.ipGeo || {}),
+            ip: publicIp,
+          }
+          // Prefer real public-IP geolocation; never keep placeholder coords.
+          if (
+            (mergedGeo.lat == null || mergedGeo.lon == null) &&
+            publicIp &&
+            publicIp !== geo.ip
+          ) {
+            const fromPublic = await lookupGeo(publicIp)
+            mergedGeo = { ...mergedGeo, ...fromPublic, ip: publicIp }
+          }
+          if (mergedGeo.city === 'Localhost' || mergedGeo.countryCode === 'LO') {
+            delete mergedGeo.lat
+            delete mergedGeo.lon
+          }
+          const probeFindings = buildFindingsFromProbes({
+            probes: body.probes,
+            email: user.email,
+            country: user.country,
+            serverGeo: mergedGeo,
+          })
+          const intel = await runThreatIntel({ probes: body.probes, serverGeo: mergedGeo })
+          const findings = dualVerifyFindings({
+            probeFindings,
+            intelFindings: intel.findings || [],
+            probes: body.probes,
+            serverGeo: mergedGeo,
+            intelResults: intel.results || [],
+          })
+          const completedAt = new Date().toISOString()
+          session.deviceName = deviceName
+          session.title = deviceName
+          session.device = {
+            name: deviceName,
+            userAgent: ua,
+            platform: body.device?.platform || body.probes.platform,
+            language: body.device?.language || body.probes.language,
+            screen: body.device?.screen || body.probes.screen,
+            timezoneOffset: body.device?.timezoneOffset ?? body.probes.timezoneOffset,
+          }
+          session.geo = mergedGeo
+          session.probes = body.probes
+          session.threatIntel = {
+            ranAt: intel.ranAt,
+            targets: intel.targets,
+            status: intel.status,
+            results: intel.results,
+          }
+          session.findings = findings
+          session.summary = summarizeDual(findings)
+          session.completedAt = completedAt
+          session.openedAt = session.openedAt || completedAt
+          session.status = 'completed'
+          await dbUpsertSession(session)
+
+          user.lastScanAt = completedAt
+          user.lastScanStatus = 'completed'
+          user.lastSeenAt = completedAt
+          user.lastIp = mergedGeo.ip || ip
+          await dbUpsertUser(user)
+
+          return json(res, { scan: publicSession(session), session: publicSession(session) })
+        }
+
+        return json(res, { error: 'Unknown action' }, 400)
       }
     }
 
     return json(res, { error: 'Not found' }, 404)
   } catch (error) {
     console.error(error)
-    return json(res, { error: 'Server error' }, 500)
+    return json(res, { error: error?.message || 'Server error' }, 500)
   }
 })
 
 server.listen(PORT, () => {
-  console.log(`Persona Scan local API on http://localhost:${PORT}`)
+  console.log(`Persona Scan API on http://localhost:${PORT} (Supabase personascan_*)`)
 })
