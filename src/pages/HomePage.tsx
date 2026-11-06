@@ -43,9 +43,8 @@ export function HomePage() {
       </div>
 
       <header className="home-topbar">
-        <Link to="/" className="home-brand">
+        <Link to="/" className="home-brand" aria-label="Persona Scan">
           <BrandMark size="sm" />
-          <span>Persona Scan</span>
         </Link>
         <Link className="home-nav-link" to="/admin">
           Admin
@@ -53,9 +52,6 @@ export function HomePage() {
       </header>
 
       <main className="home-hero">
-        <div className="home-hero-mark">
-          <BrandMark size="lg" />
-        </div>
         <h1 className="home-title">Persona Scan</h1>
         <p className="home-lede">
           One-time secured device threat scans — invite by email, open a private link, get live

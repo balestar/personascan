@@ -197,20 +197,15 @@ textarea {
   padding: 1.5rem 1.25rem 3.5rem;
 }
 
-.home-hero-mark {
-  margin-bottom: 0.35rem;
-  animation: home-rise 0.7s ease both;
-}
-
 .home-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(3rem, 11vw, 5.6rem);
+  font-size: clamp(3.4rem, 12vw, 6.2rem);
   font-weight: 800;
   letter-spacing: -0.055em;
-  line-height: 0.95;
+  line-height: 0.92;
   color: #07160f;
-  animation: home-rise 0.75s ease 0.05s both;
+  animation: home-rise 0.75s ease both;
 }
 
 .home-lede {
@@ -880,110 +875,12 @@ textarea {
   color: var(--pp-bad);
 }
 
-/* ─── Legacy shell / auth panels ─────────────────────────────────────── */
-
-.page,
-.admin-page {
-  min-height: 100vh;
-  background:
-    radial-gradient(ellipse 80% 50% at 100% -10%, rgba(0, 112, 186, 0.1), transparent 55%),
-    var(--pp-bg);
-}
-
-.atmosphere {
-  display: none;
-}
-
-.site-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.9rem clamp(1rem, 4vw, 2rem);
-  background: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid var(--pp-line);
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-
-.brand-lockup {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  font-family: var(--font-display);
-  font-weight: 700;
-  color: var(--pp-blue-deep);
-}
-
-.ghost-link {
-  background: transparent;
-  border: 0;
-  color: var(--pp-blue);
-  cursor: pointer;
-  font-weight: 700;
-  padding: 0.4rem 0.2rem;
-}
-
-.auth-panel {
-  width: min(720px, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: clamp(2rem, 8vh, 4rem) 0 3rem;
-}
-
-.brand-wordmark {
-  margin: 0 0 0.75rem;
-  font-family: var(--font-display);
-  font-size: clamp(2.4rem, 8vw, 3.8rem);
-  font-weight: 800;
-  letter-spacing: -0.04em;
-  color: var(--pp-blue-deep);
-  line-height: 0.95;
-}
-
-.brand-wordmark--sm {
-  font-size: clamp(1.4rem, 4vw, 1.8rem);
-}
-
-.auth-panel h1 {
-  margin: 0 0 0.75rem;
-  font-family: var(--font-display);
-  font-size: clamp(1.35rem, 4vw, 1.85rem);
-  color: var(--pp-ink);
-}
+/* ─── Legacy utilities (modals / shared) ─────────────────────────────── */
 
 .lede,
 .admin-sub {
   color: var(--pp-muted);
   max-width: 40rem;
-}
-
-.cta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-top: 1.5rem;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 0;
-  padding: 0.8rem 1.25rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.btn-primary {
-  background: var(--pp-blue);
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(0, 112, 186, 0.25);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--pp-blue-hover);
 }
 
 .btn-ghost {
