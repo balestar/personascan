@@ -27,9 +27,9 @@
     { "pattern": "www.personascan.net/*", "zone_name": "personascan.net" }
   ],
 
-  // Non-secret runtime vars. Put ADMIN_KEY + SUPABASE_ANON_KEY in .dev.vars (local)
-  // and sync with `pnpm cf:secrets` (Worker secrets). Never commit those values —
-  // this GitHub repo is public.
+  // Runtime vars. RESEND_API_KEY cannot live here — GitHub push protection blocks it.
+  // Set with: npx wrangler secret put RESEND_API_KEY
+  // Local: .dev.vars / .env. Keep ADMIN_KEY + SUPABASE_ANON_KEY as secrets too.
   "vars": {
     "SUPABASE_URL": "https://hxapjyxzvmouwrhdgmsx.supabase.co",
     "SCAN_SITE_URL": "https://secure.personascan.net",
