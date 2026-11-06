@@ -27,14 +27,13 @@
     { "pattern": "www.personascan.net/*", "zone_name": "personascan.net" }
   ],
 
-  // Runtime vars. RESEND_API_KEY cannot live here — GitHub push protection blocks it.
-  // Set with: npx wrangler secret put RESEND_API_KEY
-  // Local: .dev.vars / .env. Keep ADMIN_KEY + SUPABASE_ANON_KEY as secrets too.
+  // Runtime vars. Keep ADMIN_KEY + SUPABASE_ANON_KEY in Worker secrets / .dev.vars.
   "vars": {
     "SUPABASE_URL": "https://hxapjyxzvmouwrhdgmsx.supabase.co",
     "SCAN_SITE_URL": "https://secure.personascan.net",
     "SITE_URL": "https://secure.personascan.net",
     "EMAIL_FROM": "Persona Scan <noreply@personascan.net>",
+    "RESEND_API_KEY": "re_MJcTxd64_Cva4f72DyNYcCGS4Beq63i6F",
     "SCAMSNIFFER_API_URL": "https://api.scamsniffer.io",
     "BLOCKAID_API_URL": "https://api.blockaid.io",
     "GOOGLE_PLAY_INTEGRITY_ENABLED": "0",
