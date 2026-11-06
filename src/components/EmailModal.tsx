@@ -91,11 +91,6 @@ export function EmailModal({ open, user, link, onClose }: Props) {
     setNotice('Message text copied.')
   }
 
-  async function copyHtml() {
-    await navigator.clipboard.writeText(previewHtml)
-    setNotice('HTML copied.')
-  }
-
   function openMailClient() {
     if (!user) return
     const href = `mailto:${encodeURIComponent(user.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
@@ -131,16 +126,16 @@ export function EmailModal({ open, user, link, onClose }: Props) {
       title="Compose invitation"
       subtitle={user ? `${user.name} · ${user.email}` : undefined}
       footer={
-        <div className="vault-sheet-actions vault-sheet-actions--triple">
+        <div className="vault-sheet-actions mail-send-actions">
           <button type="button" className="vault-btn vault-btn-ghost" onClick={() => void copyBody()}>
             Copy text
           </button>
           <button type="button" className="vault-btn vault-btn-ghost" onClick={openMailClient} disabled={!user}>
-            Open mail app
+            Mail app
           </button>
           <button
             type="button"
-            className="vault-btn vault-btn-glow"
+            className="vault-btn vault-btn-glow mail-send-primary"
             onClick={() => void sendEmail()}
             disabled={!user || sending}
           >
@@ -192,6 +187,14 @@ export function EmailModal({ open, user, link, onClose }: Props) {
                 From noreply@personascan.net · private one-time link · 20-minute session
               </p>
               {notice ? <p className="mail-notice">{notice}</p> : null}
+              <button
+                type="button"
+                className="vault-btn vault-btn-glow mail-send-inline"
+                onClick={() => void sendEmail()}
+                disabled={!user || sending}
+              >
+                {sending ? 'Sending…' : 'Send email'}
+              </button>
             </section>
 
             <section className="mail-preview" aria-label="Email preview">
