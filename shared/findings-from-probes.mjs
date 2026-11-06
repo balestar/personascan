@@ -283,18 +283,6 @@ export function buildFindingsFromProbes(input) {
 
   findings.push(
     f({
-      id: 'scope_note_android_fs',
-      category: 'Firmware and Hardware Integrity',
-      title: 'Native Android filesystem / APK audit',
-      severity: 'info',
-      status: 'info',
-      detail:
-        'Full APK, SMS/Telegram phishing corpus, firmware, and off-origin file scans require a native agent. This session performed live browser/endpoint probes only — results above are from real checks on this device session.',
-    }),
-  )
-
-  findings.push(
-    f({
       id: 'profile_binding',
       category: 'Data Leaks and Exfiltration Risks',
       title: 'Invite profile binding',

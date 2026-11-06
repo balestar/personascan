@@ -47,7 +47,7 @@ function FindingDual({ finding, open, onToggle }: { finding: ScanFinding; open: 
           </span>
         </div>
         <strong>{finding.title}</strong>
-        <p className="finding-preview">{finding.detail}</p>
+        <p className="finding-preview">{finding.adminDetail || finding.detail}</p>
       </button>
       {open && (
         <div className="finding-body">

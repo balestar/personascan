@@ -621,7 +621,7 @@ export function ScanPage() {
           </ul>
         </div>
         <div className="ps-section">
-          <h3>What we check</h3>
+          <h3>What we check on this device</h3>
           {SCAN_COVERAGE.map((group) => (
             <div key={group.group} className="ps-cov">
               <strong>{group.group}</strong>
@@ -632,6 +632,10 @@ export function ScanPage() {
               </ul>
             </div>
           ))}
+          <p className="vault-hint">
+            Results come from live checks in this browser. Optional cloud threat feeds are not shown
+            here and are not required for a real scan.
+          </p>
         </div>
       </Sheet>
 

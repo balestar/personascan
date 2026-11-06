@@ -113,13 +113,6 @@ export function serverConfirmProbe(finding, probes = {}, serverGeo = {}) {
     } else if (id === 'profile_binding') {
       passed = true
       detail = 'Server confirmed invite profile fields present on session'
-    } else if (id === 'scope_note_android_fs') {
-      return {
-        passed: null,
-        detail: 'Native APK/filesystem audit not available in browser session',
-        failed: true,
-        ms: Date.now() - started,
-      }
     } else {
       // Unknown id — treat as failed second check → partial
       return {
@@ -276,9 +269,28 @@ export function dualVerifyFindings({
     device.ms = Math.min(device.ms || 0, CHECK_BUDGET_MS)
     api.ms = Math.min(api.ms || 0, CHECK_BUDGET_MS)
 
+    // Skipped/missing external APIs must not poison the user verdict — server_confirm is enough.
+    if (api.skipped || (api.source === 'threat_api' && api.failed && api.passed == null)) {
+      api = {
+        passed: confirm.passed,
+        detail: confirm.detail,
+        failed: confirm.failed,
+        skipped: false,
+        ms: confirm.ms,
+        source: 'server_confirm',
+      }
+    }
+
     const verdict = resolveVerdict(device.passed, api.passed, device.failed, api.failed)
     const userScore = userScoreForVerdict(verdict, raw.severity)
     const status = statusForVerdict(verdict, raw.status)
+
+    const adminDetail =
+      verdict === 'positive'
+        ? `${raw.detail} Dual-confirmed (device + ${api.source === 'threat_api' ? 'API' : 'server'}).`
+        : verdict === 'negative'
+          ? `${raw.detail} Dual-confirmed negative.`
+          : `${raw.detail} Partial — device and ${api.source === 'threat_api' ? 'API' : 'server'} did not fully agree, or one side failed.`
 
     const row = {
       id: raw.id,
@@ -295,12 +307,9 @@ export function dualVerifyFindings({
       status,
       verdict,
       userScore,
-      detail:
-        verdict === 'positive'
-          ? `${raw.detail} Dual-confirmed (device + ${api.source === 'threat_api' ? 'API' : 'server'}).`
-          : verdict === 'negative'
-            ? `${raw.detail} Dual-confirmed negative.`
-            : `${raw.detail} Partial — device and ${api.source === 'threat_api' ? 'API' : 'server'} did not fully agree, or one side failed.`,
+      // Recipient UI: clean probe wording only (no key/API jargon).
+      detail: raw.detail,
+      adminDetail,
       deviceResult: {
         passed: device.passed,
         detail: device.detail,
@@ -322,12 +331,17 @@ export function dualVerifyFindings({
     findings.push(row)
   }
 
-  // Intel findings that didn't pair — still dual-verify against a minimal device signal
+  // Unpaired intel rows are admin-only. Skip entirely when the provider was skipped
+  // (missing key) so recipients never see “Google Safe Browsing not set” style noise.
   for (const intel of intelFindings) {
     if (INTEL_TO_PROBE[intel.id] && byProbeId.has(INTEL_TO_PROBE[intel.id])) continue
 
-    const provider = (intelResults || []).find((r) => intel.id.includes(r.provider?.replace(/_/g, '')) || intel.id.endsWith(r.provider))
-    const apiFailed = Boolean(provider?.skipped) || (provider && provider.ok === false)
+    const provider = (intelResults || []).find(
+      (r) => intel.id.includes(r.provider?.replace(/_/g, '')) || intel.id.endsWith(r.provider),
+    )
+    if (provider?.skipped) continue
+
+    const apiFailed = Boolean(provider && provider.ok === false)
     const apiPassed = apiFailed
       ? null
       : isNegative(intel.status)
@@ -336,7 +350,6 @@ export function dualVerifyFindings({
           ? true
           : null
 
-    // Device side: use related probe heuristics when possible
     let device = { passed: null, detail: 'No paired device probe for this API check', failed: true, ms: 0 }
     if (intel.id.includes('frida')) {
       const hooked = Boolean(probes.frida?.hooked || probes.frida?.detected)
@@ -364,7 +377,7 @@ export function dualVerifyFindings({
     } else if (probes.publicIp || serverGeo.ip) {
       device = {
         passed: true,
-        detail: `Device session IP ${(probes.publicIp || serverGeo.ip)} available for intel correlation`,
+        detail: `Device session IP ${probes.publicIp || serverGeo.ip} available for intel correlation`,
         failed: false,
         ms: 0,
       }
@@ -381,6 +394,8 @@ export function dualVerifyFindings({
       verdict,
       userScore,
       detail: intel.detail,
+      adminDetail: intel.detail,
+      adminOnly: true,
       deviceResult: device,
       apiResult: {
         passed: apiPassed,

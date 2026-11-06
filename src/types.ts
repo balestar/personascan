@@ -30,6 +30,10 @@ export type ScanFinding = {
   severity: 'low' | 'medium' | 'high' | 'critical' | 'info'
   status: 'clear' | 'warning' | 'threat' | 'info' | 'partial'
   detail: string
+  /** Admin dual-verify wording; recipients should prefer `detail`. */
+  adminDetail?: string
+  /** Hide from recipient scan UI (intel / ops-only rows). */
+  adminOnly?: boolean
   /** Dual-verify outcome for the user score */
   verdict?: 'positive' | 'negative' | 'partial'
   /** User-facing check score (70 when dual-confirmed positive) */

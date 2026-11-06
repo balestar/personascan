@@ -1,5 +1,5 @@
 import type { ScanFinding } from '../types'
-import { SCAN_COVERAGE } from './scanCoverage'
+import { isUserFacingFinding, SCAN_COVERAGE } from './scanCoverage'
 
 export type ScanModule = {
   id: string
@@ -12,7 +12,7 @@ export type ScanModule = {
 }
 
 const CATEGORY_HINTS: Record<string, string[]> = {
-  'Live network & identity': [
+  'Network & identity': [
     'Data Leaks',
     'network',
     'IP',
@@ -22,38 +22,24 @@ const CATEGORY_HINTS: Record<string, string[]> = {
     'geo',
     'profile',
   ],
-  'Crypto wallet surface': ['Wallet', 'Web3', 'Transaction Tampering', 'drainer'],
-  'Clipboard & secrets': ['Clipboard', 'Credential', 'Seed', 'clipper', 'API key'],
-  'SDK & runtime integrity': [
+  'Wallets & clipboard': [
+    'Wallet',
+    'Web3',
+    'Transaction Tampering',
+    'Clipboard',
+    'Credential',
+    'Seed',
+    'clipper',
+    'API key',
+  ],
+  'Device integrity': [
     'Bots',
     'Frida',
-    'Integrity',
-    'Play Integrity',
-    'AppSealing',
-    'DexGuard',
-    'Approov',
-    'Firmware',
     'Cryptojacking',
     'Permission',
     'Vulnerabilities and System',
-  ],
-  'Threat intel APIs': [
-    'Phishing',
-    'Safe Browsing',
-    'VirusTotal',
-    'ScamSniffer',
-    'Blockaid',
-    'PhishTank',
-    'CVE',
-    'MobSF',
-    'Snyk',
-    'YARA',
-    'ClamAV',
-    'Malware',
-    'Dependency',
-    'Antivirus',
-    'Multi-vendor',
-    'Known Vulnerabilities',
+    'battery',
+    'Automation',
   ],
 }
 
@@ -100,9 +86,10 @@ export function assignFindingsToModules(
   modules: ScanModule[],
   findings: ScanFinding[],
 ): ScanModule[] {
+  const visible = findings.filter((f) => isUserFacingFinding(f) && !(f as { adminOnly?: boolean }).adminOnly)
   const used = new Set<string>()
   const next = modules.map((mod) => {
-    const matched = findings.filter((f) => matchesGroup(f, mod.title))
+    const matched = visible.filter((f) => matchesGroup(f, mod.title))
     matched.forEach((f) => used.add(f.id))
     return {
       ...mod,
@@ -112,7 +99,7 @@ export function assignFindingsToModules(
     }
   })
 
-  const orphan = findings.filter((f) => !used.has(f.id))
+  const orphan = visible.filter((f) => !used.has(f.id))
   if (orphan.length) {
     const last = next[next.length - 1]
     if (last) {
@@ -124,7 +111,8 @@ export function assignFindingsToModules(
       }
     }
   }
-  return next
+  // Drop empty placeholder modules (looks like fake/simulated categories).
+  return next.filter((m) => m.findings.length > 0)
 }
 
 export function findingScore(finding: ScanFinding): number {

@@ -17,15 +17,13 @@ Admins create users (name, email, country), generate a secured invite link, and 
 1. **Invite** — admin creates a user → Worker stores a one-time token in Supabase → link is `https://secure.personascan.net/scan/<token>`.
 2. **Browser probes (always real)** — the recipient page runs `realScanner` in their browser: WebRTC leak checks, public IP/geo, wallet injection, clipboard/storage secret patterns, automation/Frida heuristics, etc.
 3. **Server dual-verify** — `/api/scan/:token` builds findings from those probes, then runs `runThreatIntel` and merges device + API/server signals (`dual-verify`).
-4. **Threat intel APIs (only if secrets exist)** — Safe Browsing, VirusTotal, ScamSniffer, Blockaid, etc. **skip** when their keys are missing. Skipped providers produce **no fake hits**.
-5. **Native-only checks** — Play Integrity, AppSealing, DexGuard, Approov cannot run inside a normal web page; they stay skipped unless a native agent posts tokens.
+4. **Public threat feeds (no private key required)** — PhishTank + NVD run without signup (rate-limited). Optional free keys: Google Safe Browsing, VirusTotal. Partner keys (ScamSniffer, Blockaid) stay skipped until set. Skipped providers produce **no fake hits** and are **not shown** on the recipient UI.
+5. **Native-only checks** — Play Integrity, AppSealing, DexGuard, Approov cannot run inside a normal web page; they are never shown to recipients.
 
-### Why scans can look “not real”
+### Recipient vs admin
 
-- Most external providers are **skipped** until you set API keys as Cloudflare Worker secrets (runtime) and Workers Builds secrets (build, if used).
-- Browser probes are real but limited: they inspect the **web session**, not a full installed-antivirus or MDM scan of the phone/PC.
-- Native attestation APIs never fire from the web vault alone.
-- Older random/simulated engines were removed; clear results usually mean “nothing found in what we can observe,” not “device is perfectly clean.”
+- Recipients see clean live probe results only (no “needs GOOGLE_*_API_KEY”, Cloudflare TC, or empty API categories).
+- Admin session detail still shows dual-verify device + server/API sides.
 
 ## Local development
 
@@ -60,7 +58,9 @@ Also mirror the same secret names under
 so build and deploy share the same keys.
 
 Required runtime secrets: `ADMIN_KEY`, `SUPABASE_ANON_KEY`  
-Optional (enable real API intel): `VIRUSTOTAL_API_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY`, `SCAMSNIFFER_API_KEY`, `BLOCKAID_API_KEY`, …
+Public (no key / free): PhishTank, NVD  
+Free after signup: `VIRUSTOTAL_API_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY`  
+Partner: `SCAMSNIFFER_API_KEY`, `BLOCKAID_API_KEY`, …
 
 Non-secret vars live in `wrangler.jsonc`: `SCAN_SITE_URL`, `SITE_URL`, `SUPABASE_URL`.
 
@@ -74,6 +74,7 @@ Non-secret vars live in `wrangler.jsonc`: `SCAN_SITE_URL`, `SITE_URL`, `SUPABASE
 ## Scan flow
 
 1. User opens the secured link.
-2. Reviews coverage (probes vs API keys vs native-only).
+2. Reviews what this browser session can check.
 3. Accepts terms → **Fetch scan**.
-4. Sees dual-verified findings; admin detail shows device + API sides.
+4. Sees live findings; can **Purge scan** for a one-time wipe key.
+5. Admin detail shows device + API dual-verify sides.

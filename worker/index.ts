@@ -78,6 +78,20 @@ function siteBase(env: Env, req: Request) {
   return (env.SCAN_SITE_URL || env.SITE_URL || new URL(req.url).origin).replace(/\/$/, '')
 }
 
+function makeDumpPin() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz'
+  const bytes = crypto.getRandomValues(new Uint8Array(10))
+  let out = ''
+  for (let i = 0; i < 10; i++) out += alphabet[bytes[i]! % alphabet.length]
+  return out
+}
+
+async function hashDumpPin(pin: string, sessionId: string) {
+  const data = new TextEncoder().encode(`${sessionId}:${pin}`)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 function mapUser(row: Json) {
   return {
     id: row.id,
@@ -95,6 +109,11 @@ function mapUser(row: Json) {
 }
 
 function mapSession(row: Json) {
+  const summary =
+    row.summary && typeof row.summary === 'object'
+      ? { ...(row.summary as Json) }
+      : undefined
+  if (summary && 'dumpPinHash' in summary) delete summary.dumpPinHash
   return {
     id: row.id,
     userId: row.user_id,
@@ -114,8 +133,8 @@ function mapSession(row: Json) {
     probes: row.probes,
     threatIntel: row.threat_intel,
     findings: row.findings,
-    summary: row.summary,
-    dumpedAt: row.dumped_at,
+    summary,
+    dumpedAt: row.dumped_at || summary?.dumpedAt,
     link: row.link,
   }
 }
@@ -404,6 +423,85 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
           },
           expiresAt: session.expires_at,
           session: mapSession(updated),
+        })
+      }
+
+      if (action === 'dump') {
+        const summary = (session.summary || {}) as Json
+        if (session.dumped_at || summary.dumped) {
+          return json({ error: 'This scan was already dumped. The dump key cannot be read again.' }, 409)
+        }
+        if (session.status !== 'completed' && session.status !== 'expired') {
+          return json({ error: 'Purge is only available after a completed scan.' }, 400)
+        }
+        const findings = session.findings as unknown[] | null
+        if (!(findings?.length || summary.total || session.completed_at)) {
+          return json({ error: 'Nothing to purge on this session.' }, 400)
+        }
+        const dumpPin = makeDumpPin()
+        const dumpedAt = new Date().toISOString()
+        const terminateAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
+        const dumpPinHash = await hashDumpPin(dumpPin, String(session.id))
+        const patch = {
+          findings: [],
+          probes: null,
+          threat_intel: null,
+          dumped_at: dumpedAt,
+          expires_at: terminateAt,
+          summary: {
+            total: 0,
+            clear: 0,
+            warning: 0,
+            threat: 0,
+            dumped: true,
+            dumpedAt,
+            terminateAt,
+            dumpPinHash,
+          },
+        }
+        await sb(env, 'personascan_sessions', {
+          method: 'PATCH',
+          query: `?id=eq.${encodeURIComponent(String(session.id))}`,
+          body: JSON.stringify(patch),
+        })
+        await sb(env, 'personascan_users', {
+          method: 'PATCH',
+          query: `?id=eq.${encodeURIComponent(String(session.user_id))}`,
+          body: JSON.stringify({
+            last_seen_at: dumpedAt,
+            link_expires_at: terminateAt,
+          }),
+        })
+        const updated = { ...session, ...patch }
+        return json({
+          dumpPin,
+          dumpedAt,
+          terminateAt,
+          message:
+            'Nobody can access your data through this key. Session terminates automatically in 2 minutes.',
+          session: mapSession(updated),
+        })
+      }
+
+      if (action === 'terminate') {
+        const summary = (session.summary || {}) as Json
+        if (!session.dumped_at && !summary.dumped) {
+          return json({ error: 'Purge the scan before terminating.' }, 400)
+        }
+        const expiresAt = new Date().toISOString()
+        await sb(env, 'personascan_sessions', {
+          method: 'PATCH',
+          query: `?id=eq.${encodeURIComponent(String(session.id))}`,
+          body: JSON.stringify({ status: 'expired', expires_at: expiresAt }),
+        })
+        await sb(env, 'personascan_users', {
+          method: 'PATCH',
+          query: `?id=eq.${encodeURIComponent(String(session.user_id))}`,
+          body: JSON.stringify({ last_scan_status: 'expired', last_seen_at: expiresAt }),
+        })
+        return json({
+          ok: true,
+          session: mapSession({ ...session, status: 'expired', expires_at: expiresAt }),
         })
       }
 
