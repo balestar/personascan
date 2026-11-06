@@ -1,28 +1,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 
 const DEFAULT_FROM = "Persona Scan <noreply@personascan.net>"
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-admin-key",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+}
 
 function json(data: unknown, status = 200) {
-  return Response.json(data, {
-    status,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "authorization, x-admin-key, content-type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-    },
-  })
+  return Response.json(data, { status, headers: CORS })
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-admin-key, content-type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-      },
-    })
+    return new Response(null, { status: 204, headers: CORS })
   }
 
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)

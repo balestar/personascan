@@ -1,15 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-admin-key",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+}
+
 function json(data: unknown, status = 200) {
-  return Response.json(data, {
-    status,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "authorization, x-admin-key, content-type",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    },
-  })
+  return Response.json(data, { status, headers: CORS })
 }
 
 function mapSession(row: Record<string, unknown>) {
@@ -45,14 +45,7 @@ function mapSession(row: Record<string, unknown>) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-admin-key, content-type",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      },
-    })
+    return new Response(null, { status: 204, headers: CORS })
   }
 
   const adminKey = Deno.env.get("ADMIN_KEY") || ""

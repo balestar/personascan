@@ -3,6 +3,7 @@ import { sendInviteEmail } from '../lib/api'
 import { blankCustomEmail, oneTimeScanTemplate } from '../lib/emailTemplates'
 import type { UserRecord } from '../types'
 import { Modal } from './Modal'
+import { ToastStack, useToasts } from './Toast'
 
 type Props = {
   open: boolean
@@ -34,8 +35,8 @@ export function EmailModal({ open, user, link, onClose }: Props) {
   const [mode, setMode] = useState<'template' | 'custom'>('template')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
-  const [notice, setNotice] = useState('')
   const [sending, setSending] = useState(false)
+  const toasts = useToasts()
 
   const template = useMemo(() => {
     if (!user) return null
@@ -50,7 +51,6 @@ export function EmailModal({ open, user, link, onClose }: Props) {
   useEffect(() => {
     if (!open || !user) return
     setMode('template')
-    setNotice('')
     const draft = oneTimeScanTemplate({
       name: user.name,
       link,
@@ -64,7 +64,6 @@ export function EmailModal({ open, user, link, onClose }: Props) {
   function applyMode(next: 'template' | 'custom') {
     if (!user) return
     setMode(next)
-    setNotice('')
     if (next === 'template') {
       const draft = oneTimeScanTemplate({
         name: user.name,
@@ -88,125 +87,135 @@ export function EmailModal({ open, user, link, onClose }: Props) {
 
   async function copyBody() {
     await navigator.clipboard.writeText(body)
-    setNotice('Message text copied.')
+    toasts.success('Message text copied')
   }
 
   function openMailClient() {
     if (!user) return
     const href = `mailto:${encodeURIComponent(user.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
     window.location.href = href
-    setNotice('Opening mail client…')
+    toasts.info('Opening mail app…')
   }
 
   async function sendEmail() {
     if (!user || sending) return
+    if (!user.email) {
+      toasts.error('Recipient email is missing')
+      return
+    }
+    if (!subject.trim() || !previewHtml.trim()) {
+      toasts.error('Subject and message are required')
+      return
+    }
+
     setSending(true)
-    setNotice('')
     try {
       const result = await sendInviteEmail({
         to: user.email,
-        subject,
+        subject: subject.trim(),
         html: previewHtml,
         text: body,
       })
-      setNotice(`Sent from ${result.from}`)
+      toasts.success(`Email sent to ${result.to} from ${result.from}`)
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Send failed')
+      toasts.error(err instanceof Error ? err.message : 'Send failed')
     } finally {
       setSending(false)
     }
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      wide
-      variant="vault"
-      title="Compose invitation"
-      subtitle={user ? `${user.name} · ${user.email}` : undefined}
-      footer={
-        <div className="vault-sheet-actions mail-send-actions">
-          <button type="button" className="vault-btn vault-btn-ghost" onClick={() => void copyBody()}>
-            Copy text
-          </button>
-          <button type="button" className="vault-btn vault-btn-ghost" onClick={openMailClient} disabled={!user}>
-            Mail app
-          </button>
-          <button
-            type="button"
-            className="vault-btn vault-btn-glow mail-send-primary"
-            onClick={() => void sendEmail()}
-            disabled={!user || sending}
-          >
-            {sending ? 'Sending…' : 'Send email'}
-          </button>
-        </div>
-      }
-    >
-      {!user ? (
-        <p className="vault-hint">No recipient selected.</p>
-      ) : (
-        <div className="mail-compose">
-          <div className="mail-seg" role="tablist" aria-label="Email type">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'template'}
-              className={mode === 'template' ? 'is-active' : ''}
-              onClick={() => applyMode('template')}
-            >
-              Scan template
+    <>
+      <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
+      <Modal
+        open={open}
+        onClose={onClose}
+        wide
+        variant="vault"
+        title="Compose invitation"
+        subtitle={user ? `${user.name} · ${user.email}` : undefined}
+        footer={
+          <div className="vault-sheet-actions mail-send-actions">
+            <button type="button" className="vault-btn vault-btn-ghost" onClick={() => void copyBody()}>
+              Copy text
+            </button>
+            <button type="button" className="vault-btn vault-btn-ghost" onClick={openMailClient} disabled={!user}>
+              Mail app
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={mode === 'custom'}
-              className={mode === 'custom' ? 'is-active' : ''}
-              onClick={() => applyMode('custom')}
+              className="vault-btn vault-btn-glow mail-send-primary"
+              onClick={() => void sendEmail()}
+              disabled={!user || sending}
             >
-              Custom
+              {sending ? 'Sending…' : 'Send email'}
             </button>
           </div>
-
-          <div className="mail-grid">
-            <section className="mail-editor" aria-label="Compose">
-              <label className="mail-field">
-                <span>To</span>
-                <input value={user.email} readOnly />
-              </label>
-              <label className="mail-field">
-                <span>Subject</span>
-                <input value={subject} onChange={(e) => setSubject(e.target.value)} />
-              </label>
-              <label className="mail-field mail-field--grow">
-                <span>Message</span>
-                <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} />
-              </label>
-              <p className="mail-hint">
-                From noreply@personascan.net · private one-time link · 20-minute session
-              </p>
-              {notice ? <p className="mail-notice">{notice}</p> : null}
+        }
+      >
+        {!user ? (
+          <p className="vault-hint">No recipient selected.</p>
+        ) : (
+          <div className="mail-compose">
+            <div className="mail-seg" role="tablist" aria-label="Email type">
               <button
                 type="button"
-                className="vault-btn vault-btn-glow mail-send-inline"
-                onClick={() => void sendEmail()}
-                disabled={!user || sending}
+                role="tab"
+                aria-selected={mode === 'template'}
+                className={mode === 'template' ? 'is-active' : ''}
+                onClick={() => applyMode('template')}
               >
-                {sending ? 'Sending…' : 'Send email'}
+                Scan template
               </button>
-            </section>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'custom'}
+                className={mode === 'custom' ? 'is-active' : ''}
+                onClick={() => applyMode('custom')}
+              >
+                Custom
+              </button>
+            </div>
 
-            <section className="mail-preview" aria-label="Email preview">
-              <div className="mail-preview-head">
-                <strong>Live preview</strong>
-                <span>{mode === 'template' ? 'HTML template' : 'Plain message'}</span>
-              </div>
-              <iframe title="Email preview" className="mail-frame" srcDoc={previewHtml} sandbox="" />
-            </section>
+            <div className="mail-grid">
+              <section className="mail-editor" aria-label="Compose">
+                <label className="mail-field">
+                  <span>To</span>
+                  <input value={user.email} readOnly />
+                </label>
+                <label className="mail-field">
+                  <span>Subject</span>
+                  <input value={subject} onChange={(e) => setSubject(e.target.value)} />
+                </label>
+                <label className="mail-field mail-field--grow">
+                  <span>Message</span>
+                  <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} />
+                </label>
+                <p className="mail-hint">
+                  From noreply@personascan.net · private one-time link · 20-minute session
+                </p>
+                <button
+                  type="button"
+                  className="vault-btn vault-btn-glow mail-send-inline"
+                  onClick={() => void sendEmail()}
+                  disabled={!user || sending}
+                >
+                  {sending ? 'Sending…' : 'Send email'}
+                </button>
+              </section>
+
+              <section className="mail-preview" aria-label="Email preview">
+                <div className="mail-preview-head">
+                  <strong>Live preview</strong>
+                  <span>{mode === 'template' ? 'HTML template' : 'Plain message'}</span>
+                </div>
+                <iframe title="Email preview" className="mail-frame" srcDoc={previewHtml} sandbox="" />
+              </section>
+            </div>
           </div>
-        </div>
-      )}
-    </Modal>
+        )}
+      </Modal>
+    </>
   )
 }
