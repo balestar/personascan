@@ -12,12 +12,50 @@ function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers: CORS })
 }
 
-function mapSession(row: Record<string, unknown>) {
+function parseCustomResults(raw: unknown) {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item) =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as { id?: unknown }).id === "string" &&
+      typeof (item as { type?: unknown }).type === "string",
+  ) as Array<{ id: string; type: string; label?: string; riskRate?: number; note?: string }>
+}
+
+function mergeCustomFindings(findings: unknown, customResults: unknown) {
+  const extras = parseCustomResults(customResults).map((item) => {
+    const rate = Math.min(100, Math.max(1, Math.round(Number(item.riskRate) || 1)))
+    return {
+      id: `custom_${item.id}`,
+      category: "Custom results",
+      title: item.label || item.type,
+      severity: rate >= 75 ? "critical" : rate >= 50 ? "high" : rate >= 25 ? "medium" : "low",
+      status: rate >= 50 ? "threat" : rate >= 25 ? "warning" : "info",
+      outcome: "failed",
+      verdict: rate >= 50 ? "negative" : "partial",
+      detail: item.note || `${item.label || item.type} was flagged on this account.`,
+      evidence: `Risk ${rate}/100`,
+      userScore: rate,
+      adminOnly: false,
+    }
+  })
+  const rest = (Array.isArray(findings) ? findings : []).filter(
+    (item) =>
+      !String((item as { id?: string })?.id || "").startsWith("custom_") &&
+      (item as { category?: string })?.category !== "Custom results",
+  )
+  return extras.length ? [...extras, ...rest] : rest
+}
+
+function mapSession(row: Record<string, unknown>, customResults: unknown[] = []) {
   const summary =
     row.summary && typeof row.summary === "object"
       ? { ...(row.summary as Record<string, unknown>) }
       : undefined
   if (summary && "dumpPinHash" in summary) delete summary.dumpPinHash
+  const dumped = Boolean(row.dumped_at || summary?.dumped)
+  const flags = dumped ? [] : customResults
   return {
     id: row.id,
     userId: row.user_id,
@@ -36,10 +74,11 @@ function mapSession(row: Record<string, unknown>) {
     geo: row.geo,
     probes: row.probes,
     threatIntel: row.threat_intel,
-    findings: row.findings,
+    findings: dumped ? row.findings : mergeCustomFindings(row.findings, flags),
     summary,
     dumpedAt: row.dumped_at || summary?.dumpedAt,
     link: row.link,
+    customResults: flags,
   }
 }
 
@@ -110,6 +149,15 @@ Deno.serve(async (req: Request) => {
 
   const summary = (session.summary || {}) as Record<string, unknown>
   const dumped = Boolean(session.dumped_at || summary.dumped)
+  let customResults: unknown[] = []
+  if (!dumped && session.user_id) {
+    const userRow = await sb
+      .from("personascan_users")
+      .select("custom_results")
+      .eq("id", session.user_id)
+      .maybeSingle()
+    customResults = parseCustomResults(userRow.data?.custom_results)
+  }
 
   if (action === "open") {
     if (session.status !== "pending" && session.status !== "active" && session.status !== "completed") {
@@ -133,7 +181,7 @@ Deno.serve(async (req: Request) => {
         country: session.user_country,
       },
       expiresAt: session.expires_at,
-      session: mapSession(updated),
+      session: mapSession(updated, customResults),
     })
   }
 

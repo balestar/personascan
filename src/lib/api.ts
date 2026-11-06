@@ -212,25 +212,25 @@ export async function getScanSession(
   },
 ) {
   try {
-    return await supabaseFn<{
+    return await request<{
       user: { name: string; email: string; country: string }
       expiresAt: string
       session: ScanSession
       blocked?: boolean
-    }>('scan-session', {
+    }>(`/api/scan/${encodeURIComponent(token)}`, {
       method: 'POST',
-      body: JSON.stringify({ token, action: 'open', device }),
+      body: JSON.stringify({ action: 'open', device }),
     })
   } catch (err) {
     try {
-      return await request<{
+      return await supabaseFn<{
         user: { name: string; email: string; country: string }
         expiresAt: string
         session: ScanSession
         blocked?: boolean
-      }>(`/api/scan/${encodeURIComponent(token)}`, {
+      }>('scan-session', {
         method: 'POST',
-        body: JSON.stringify({ action: 'open', device }),
+        body: JSON.stringify({ token, action: 'open', device }),
       })
     } catch {
       throw err instanceof Error ? err : new Error('Unable to open scan link')

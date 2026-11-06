@@ -13,6 +13,7 @@ import { buildFindingsFromProbes } from './_shared/findings-from-probes.mjs'
 import { dualVerifyFindings, summarizeDual } from './_shared/dual-verify.mjs'
 import { runThreatIntel } from './_shared/threat-intel.mjs'
 import { getSessionRecord, saveSessionRecord } from './sessions'
+import { mergeCustomFindings } from './_shared/custom-results.mjs'
 
 function hashDumpPin(pin: string, sessionId: string) {
   return createHash('sha256').update(`${sessionId}:${pin}`).digest('hex')
@@ -25,16 +26,27 @@ function makeDumpPin() {
   return out
 }
 
-function publicSession<T extends Record<string, unknown>>(session: T): T {
+function publicSession<T extends Record<string, unknown>>(
+  session: T,
+  customResults: unknown[] = [],
+): T {
   const summary = session.summary && typeof session.summary === 'object'
     ? { ...(session.summary as Record<string, unknown>) }
     : undefined
   if (summary && 'dumpPinHash' in summary) delete summary.dumpPinHash
+  const dumped = Boolean(
+    (session as { dumpedAt?: string }).dumpedAt || (summary as { dumped?: boolean } | undefined)?.dumped,
+  )
+  const flags = dumped ? [] : customResults
   return {
     ...session,
     summary,
     dumpedAt: (session as { dumpedAt?: string }).dumpedAt || (summary?.dumpedAt as string | undefined),
-  }
+    customResults: flags,
+    findings: dumped
+      ? ((session as { findings?: unknown[] }).findings || [])
+      : mergeCustomFindings((session as { findings?: unknown[] }).findings, flags),
+  } as T
 }
 
 function detectDeviceName(ua = '', platform = '') {
@@ -107,7 +119,7 @@ export default async (req: Request, context: Context) => {
     return json({
       user: { name: user.name, email: user.email, country: user.country },
       expiresAt: session.expiresAt,
-      session: publicSession(session as unknown as Record<string, unknown>),
+      session: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
     })
   }
 
@@ -160,7 +172,7 @@ export default async (req: Request, context: Context) => {
       return json({
         user: { name: user.name, email: user.email, country: user.country },
         expiresAt: session.expiresAt,
-        session: publicSession(session as unknown as Record<string, unknown>),
+        session: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
       })
     }
 
@@ -206,7 +218,7 @@ export default async (req: Request, context: Context) => {
         terminateAt,
         message:
           'Nobody can access your data through this key. Session terminates automatically in 2 minutes.',
-        session: publicSession(session as unknown as Record<string, unknown>),
+        session: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
       })
     }
 
@@ -223,7 +235,7 @@ export default async (req: Request, context: Context) => {
       await saveUser(user)
       return json({
         ok: true,
-        session: publicSession(session as unknown as Record<string, unknown>),
+        session: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
       })
     }
 
@@ -298,8 +310,8 @@ export default async (req: Request, context: Context) => {
         status: intel.status,
         results: intel.results,
       }
-      session.findings = findings
-      session.summary = summarizeDual(findings)
+      session.findings = mergeCustomFindings(findings, user.customResults)
+      session.summary = summarizeDual(session.findings)
       session.completedAt = completedAt
       session.openedAt = session.openedAt || completedAt
       session.status = 'completed'
@@ -312,8 +324,8 @@ export default async (req: Request, context: Context) => {
       await saveUser(user)
 
       return json({
-        scan: publicSession(session as unknown as Record<string, unknown>),
-        session: publicSession(session as unknown as Record<string, unknown>),
+        scan: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
+        session: publicSession(session as unknown as Record<string, unknown>, user.customResults || []),
       })
     }
 

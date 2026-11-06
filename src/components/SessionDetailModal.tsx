@@ -165,7 +165,11 @@ export function SessionDetailModal({ open, session, userCustomResults, onClose, 
   if (!view) return null
 
   const findings = (view.findings || []).filter(
-    (f) => !String(f.id || '').startsWith('intel_') && f.category !== 'Optional threat intel',
+    (f) =>
+      !String(f.id || '').startsWith('intel_') &&
+      f.category !== 'Optional threat intel' &&
+      !String(f.id || '').startsWith('custom_') &&
+      f.category !== 'Custom results',
   )
   const intel = (view.threatIntel || {}) as {
     ranAt?: string

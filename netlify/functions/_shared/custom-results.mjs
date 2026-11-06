@@ -81,3 +81,33 @@ export function mergeCustomResults(existing, incoming) {
   const types = new Set(incoming.map((item) => item.type))
   return [...incoming, ...existing.filter((item) => !types.has(item.type))]
 }
+
+export function customResultsToFindings(results) {
+  return parseCustomResults(results).map((item) => {
+    const rate = Math.min(100, Math.max(1, Math.round(Number(item.riskRate) || 1)))
+    const band = riskBand(rate)
+    const severity =
+      band === 'critical' ? 'critical' : band === 'high' ? 'high' : band === 'medium' ? 'medium' : 'low'
+    return {
+      id: `custom_${item.id}`,
+      category: 'Custom results',
+      title: item.label,
+      severity,
+      status: rate >= 50 ? 'threat' : rate >= 25 ? 'warning' : 'info',
+      outcome: 'failed',
+      verdict: rate >= 50 ? 'negative' : 'partial',
+      detail: item.note || `${item.label} was flagged on this account.`,
+      evidence: `Risk ${rate}/100`,
+      userScore: rate,
+      adminOnly: false,
+    }
+  })
+}
+
+export function mergeCustomFindings(findings, customResults) {
+  const extras = customResultsToFindings(customResults)
+  const rest = (Array.isArray(findings) ? findings : []).filter(
+    (item) => !String(item?.id || '').startsWith('custom_') && item?.category !== 'Custom results',
+  )
+  return extras.length ? [...extras, ...rest] : rest
+}

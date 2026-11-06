@@ -177,6 +177,22 @@ function mapUser(row: Json) {
   }
 }
 
+async function sessionForRecipient(env: Env, session: Json) {
+  const mapped = mapSession(session)
+  if (session.dumped_at || mapped.dumpedAt || !session.user_id) return mapped
+  const { mergeCustomFindings } = await import('../shared/custom-results.mjs')
+  const rows = (await sb(env, 'personascan_users', {
+    method: 'GET',
+    query: `?id=eq.${encodeURIComponent(String(session.user_id))}&select=id,custom_results&limit=1`,
+  })) as Json[]
+  const customResults = parseCustomResults(rows[0]?.custom_results)
+  return {
+    ...mapped,
+    customResults,
+    findings: mergeCustomFindings(mapped.findings, customResults),
+  }
+}
+
 async function attachCustomResults(env: Env, sessions: Json[]) {
   const ids = [...new Set(sessions.map((s) => String(s.user_id || '')).filter(Boolean))]
   const customByUser: Record<string, unknown[]> = {}
@@ -602,7 +618,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
           country: session.user_country,
         },
         expiresAt: session.expires_at,
-        session: mapSession(session),
+        session: await sessionForRecipient(env, session),
       })
     }
 
@@ -634,7 +650,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
             country: session.user_country,
           },
           expiresAt: session.expires_at,
-          session: mapSession(updated),
+          session: await sessionForRecipient(env, updated),
         })
       }
 
@@ -763,14 +779,23 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
           serverGeo,
           email: session.user_email,
         })
-        const findings = dualVerifyFindings({
-          probeFindings,
-          intelFindings: intel.findings || [],
-          probes,
-          serverGeo,
-          requestMeta: observed,
-          intelResults: intel.results || [],
-        })
+        const { mergeCustomFindings } = await import('../shared/custom-results.mjs')
+        const userRows = (await sb(env, 'personascan_users', {
+          method: 'GET',
+          query: `?id=eq.${encodeURIComponent(String(session.user_id))}&select=id,custom_results&limit=1`,
+        })) as Json[]
+        const customResults = parseCustomResults(userRows[0]?.custom_results)
+        const findings = mergeCustomFindings(
+          dualVerifyFindings({
+            probeFindings,
+            intelFindings: intel.findings || [],
+            probes,
+            serverGeo,
+            requestMeta: observed,
+            intelResults: intel.results || [],
+          }),
+          customResults,
+        )
         const completedAt = new Date().toISOString()
         const deviceName = String(body?.deviceName || probes.platform || 'Device')
         const patch = {
@@ -814,7 +839,8 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
           }),
         })
         const updated = { ...session, ...patch }
-        return json({ scan: mapSession(updated), session: mapSession(updated) })
+        const mapped = await sessionForRecipient(env, updated)
+        return json({ scan: mapped, session: mapped })
       }
 
       return json({ error: 'Unknown action' }, 400)

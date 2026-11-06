@@ -5,7 +5,7 @@ import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
 import { DEFAULT_FROM, sendResendEmail } from '../shared/send-resend.mjs'
 import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
 import { anyapiConfigured, anyapiLookupIp } from '../shared/anyapi.mjs'
-import { buildCustomResults, mergeCustomResults } from '../shared/custom-results.mjs'
+import { buildCustomResults, mergeCustomFindings, mergeCustomResults } from '../shared/custom-results.mjs'
 import {
   attachCustomResultsToSessions,
   dbDeleteBlock,
@@ -44,15 +44,19 @@ function makeDumpPin() {
 }
 
 /** Never expose dump pin hash (or wiped probe payload) to clients. */
-function publicSession(session) {
+function publicSession(session, user) {
   if (!session) return session
   const summary = session.summary ? { ...session.summary } : undefined
   if (summary && 'dumpPinHash' in summary) delete summary.dumpPinHash
+  const dumped = Boolean(session.dumpedAt || summary?.dumped)
+  const customResults = dumped ? [] : user?.customResults || session.customResults || []
   return {
     ...session,
     summary,
     dumpPinHash: undefined,
     dumpedAt: session.dumpedAt || summary?.dumpedAt,
+    customResults,
+    findings: dumped ? session.findings || [] : mergeCustomFindings(session.findings, customResults),
   }
 }
 
@@ -489,7 +493,7 @@ const server = createServer(async (req, res) => {
         return json(res, {
           user: { name: user.name, email: user.email, country: user.country },
           expiresAt: session.expiresAt,
-          session: publicSession(session),
+          session: publicSession(session, user),
         })
       }
 
@@ -522,7 +526,7 @@ const server = createServer(async (req, res) => {
           return json(res, {
             user: { name: user.name, email: user.email, country: user.country },
             expiresAt: session.expiresAt,
-            session: publicSession(session),
+            session: publicSession(session, user),
           })
         }
 
@@ -565,7 +569,7 @@ const server = createServer(async (req, res) => {
             terminateAt,
             message:
               'Nobody can access your data through this key. Session terminates automatically in 2 minutes.',
-            session: publicSession(session),
+            session: publicSession(session, user),
           })
         }
 
@@ -579,7 +583,7 @@ const server = createServer(async (req, res) => {
           user.lastScanStatus = 'expired'
           user.lastSeenAt = session.expiresAt
           await dbUpsertUser(user)
-          return json(res, { ok: true, session: publicSession(session) })
+          return json(res, { ok: true, session: publicSession(session, user) })
         }
 
         if (action === 'scan') {
@@ -655,8 +659,8 @@ const server = createServer(async (req, res) => {
             status: intel.status,
             results: intel.results,
           }
-          session.findings = findings
-          session.summary = summarizeDual(findings)
+          session.findings = mergeCustomFindings(findings, user.customResults)
+          session.summary = summarizeDual(session.findings)
           session.completedAt = completedAt
           session.openedAt = session.openedAt || completedAt
           session.status = 'completed'
@@ -668,7 +672,7 @@ const server = createServer(async (req, res) => {
           user.lastIp = ip || mergedGeo.ip
           await dbUpsertUser(user)
 
-          return json(res, { scan: publicSession(session), session: publicSession(session) })
+          return json(res, { scan: publicSession(session, user), session: publicSession(session, user) })
         }
 
         return json(res, { error: 'Unknown action' }, 400)

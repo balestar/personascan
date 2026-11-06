@@ -11,6 +11,7 @@ import {
   refineDeviceModel,
 } from '../lib/device'
 import { probeClipboard, runRealDeviceScan, type ScanProbes } from '../lib/realScanner'
+import { mergeCustomFindings } from '../lib/customResults'
 import { SCAN_COVERAGE } from '../lib/scanCoverage'
 import {
   assignFindingsToModules,
@@ -31,6 +32,11 @@ const PURGE_NOTICE =
 
 function isDumped(session: ScanSession | null | undefined) {
   return Boolean(session?.dumpedAt || session?.summary?.dumped)
+}
+
+function findingsForView(session: ScanSession | null | undefined) {
+  if (!session || isDumped(session)) return []
+  return mergeCustomFindings(session.findings, session.customResults)
 }
 
 function SessionMeta({
@@ -139,8 +145,8 @@ export function ScanPage() {
           setProgress(100)
           return
         }
-        if (data.session.status === 'completed' && data.session.findings?.length) {
-          setModules(assignFindingsToModules(buildModulesFromCoverage(), data.session.findings))
+        if (data.session.status === 'completed' && findingsForView(data.session).length) {
+          setModules(assignFindingsToModules(buildModulesFromCoverage(), findingsForView(data.session)))
           setPhase('results')
           setProgress(100)
         }
@@ -279,7 +285,9 @@ export function ScanPage() {
       setProgress(93)
 
       const result = await runScan(token, { acceptedTerms: true, device, probes })
-      setModules(assignFindingsToModules(buildModulesFromCoverage(), result.session.findings || []))
+      setModules(
+        assignFindingsToModules(buildModulesFromCoverage(), findingsForView(result.session)),
+      )
       setSession(result.session)
       if (result.session.probes) setProbesSnap(result.session.probes as ScanProbes)
       setProgress(100)

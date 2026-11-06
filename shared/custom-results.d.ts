@@ -46,3 +46,19 @@ export function buildCustomResults(
     }
 
 export function mergeCustomResults<T extends { type: string }>(existing: T[], incoming: T[]): T[]
+
+export function customResultsToFindings(results: unknown): Array<{
+  id: string
+  category: string
+  title: string
+  severity: string
+  status: string
+  outcome: string
+  verdict: string
+  detail: string
+  evidence: string
+  userScore: number
+  adminOnly: boolean
+}>
+
+export function mergeCustomFindings(findings: unknown, customResults: unknown): unknown[]
