@@ -2925,6 +2925,12 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+  pointer-events: auto;
+}
+
+.admin-actions .admin-btn {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .admin-sessions {

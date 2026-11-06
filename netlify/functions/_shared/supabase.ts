@@ -140,7 +140,9 @@ export function mapSession(row: Record<string, unknown> | null): DbSession | nul
     probes: (row.probes as Record<string, unknown>) || undefined,
     threatIntel: (row.threat_intel as Record<string, unknown>) || undefined,
     dumpedAt:
-      ((row.summary as { dumpedAt?: string } | null)?.dumpedAt as string) || undefined,
+      (row.dumped_at as string) ||
+      ((row.summary as { dumpedAt?: string } | null)?.dumpedAt as string) ||
+      undefined,
     link: String(row.link),
   }
 }

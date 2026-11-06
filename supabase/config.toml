@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.admin-session]
 verify_jwt = false
+
+[functions.scan-session]
+verify_jwt = false

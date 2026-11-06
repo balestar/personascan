@@ -74,7 +74,7 @@ export function mapSession(row) {
     summary: row.summary || undefined,
     probes: row.probes || undefined,
     threatIntel: row.threat_intel || undefined,
-    dumpedAt: row.summary?.dumpedAt || undefined,
+    dumpedAt: row.dumped_at || row.summary?.dumpedAt || undefined,
     link: row.link,
   }
 }

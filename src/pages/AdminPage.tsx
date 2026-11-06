@@ -5,6 +5,7 @@ import { BrandMark } from '../components/BrandMark'
 import { CreateUserModal } from '../components/CreateUserModal'
 import { EmailModal } from '../components/EmailModal'
 import { SessionDetailModal } from '../components/SessionDetailModal'
+import { ToastStack, useToasts } from '../components/Toast'
 import { COUNTRY_CODES } from '../lib/countries'
 import { flagForCountry } from '../lib/countryFlag'
 import {
@@ -56,6 +57,7 @@ export function AdminPage() {
   const [blockType, setBlockType] = useState<'country' | 'ip'>('country')
   const [blockValue, setBlockValue] = useState('CN')
   const [blockReason, setBlockReason] = useState('')
+  const toasts = useToasts()
 
   const refresh = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true)
@@ -144,6 +146,7 @@ export function AdminPage() {
     try {
       const result = await createUser(payload)
       setNotice(`Created ${result.user.name} · 20-minute session ready.`)
+      toasts.success(`Created ${result.user.name}`)
       setCreateOpen(false)
       setExpanded((prev) => ({ ...prev, [result.user.id]: true }))
       setEmailUser(result.user)
@@ -173,11 +176,14 @@ export function AdminPage() {
     try {
       const result = await generateLink(userId)
       setNotice('New 20-minute session link generated.')
+      toasts.success('New session link generated')
       setExpanded((prev) => ({ ...prev, [userId]: true }))
       await refresh()
       openEmail(result.user, result.link, result.expiresAt)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not generate link')
+      const msg = err instanceof Error ? err.message : 'Could not generate link'
+      setError(msg)
+      toasts.error(msg)
     } finally {
       setLoading(false)
     }
@@ -188,9 +194,12 @@ export function AdminPage() {
     setLoading(true)
     try {
       await deleteUser(userId)
+      toasts.success('User deleted')
       await refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed')
+      const msg = err instanceof Error ? err.message : 'Delete failed'
+      setError(msg)
+      toasts.error(msg)
     } finally {
       setLoading(false)
     }
@@ -228,11 +237,14 @@ export function AdminPage() {
     try {
       await cancelSession(id)
       setNotice('Session cancelled.')
+      toasts.success('Session cancelled')
       setDetailOpen(false)
       setSelectedSession(null)
       await refresh({ quiet: true })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Cancel failed')
+      const msg = err instanceof Error ? err.message : 'Cancel failed'
+      setError(msg)
+      toasts.error(msg)
     } finally {
       setLoading(false)
     }
@@ -255,6 +267,7 @@ export function AdminPage() {
       })
       setBlockReason('')
       setNotice('Geo / IP block added.')
+      toasts.success('Block added')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not add block')
@@ -267,6 +280,7 @@ export function AdminPage() {
     setLoading(true)
     try {
       await removeGeoBlock(id)
+      toasts.success('Block removed')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not remove block')
@@ -494,6 +508,7 @@ export function AdminPage() {
                                       onClick={async () => {
                                         await navigator.clipboard.writeText(session.link)
                                         setNotice('Session link copied.')
+                                        toasts.success('Session link copied')
                                       }}
                                     >
                                       Copy
@@ -505,6 +520,15 @@ export function AdminPage() {
                                     >
                                       Email
                                     </button>
+                                    {(session.status === 'pending' || session.status === 'active') && (
+                                      <button
+                                        className="admin-btn admin-btn-danger"
+                                        type="button"
+                                        onClick={() => void onCancelSession(session.id)}
+                                      >
+                                        Cancel
+                                      </button>
+                                    )}
                                   </div>
                                 </article>
                               )
@@ -681,6 +705,7 @@ export function AdminPage() {
         )}
       </main>
 
+      <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
       <CreateUserModal
         open={createOpen}
         loading={loading}

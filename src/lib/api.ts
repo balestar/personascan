@@ -220,26 +220,54 @@ export function runScan(
 }
 
 /** Wipe session findings/probes; returns a one-time alphanumeric purge key (never readable again). */
-export function dumpScan(token: string) {
-  return request<{
-    dumpPin: string
-    dumpedAt: string
-    terminateAt: string
-    message: string
-    session: ScanSession
-  }>(`/api/scan/${encodeURIComponent(token)}`, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'dump' }),
-  })
+export async function dumpScan(token: string) {
+  try {
+    return await supabaseFn<{
+      dumpPin: string
+      dumpedAt: string
+      terminateAt: string
+      message: string
+      session: ScanSession
+    }>('scan-session', {
+      method: 'POST',
+      body: JSON.stringify({ token, action: 'dump' }),
+    })
+  } catch (err) {
+    try {
+      return await request<{
+        dumpPin: string
+        dumpedAt: string
+        terminateAt: string
+        message: string
+        session: ScanSession
+      }>(`/api/scan/${encodeURIComponent(token)}`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'dump' }),
+      })
+    } catch {
+      throw err instanceof Error ? err : new Error('Purge failed')
+    }
+  }
 }
 
 /** End the purged session immediately (also auto-fires 2 minutes after purge). */
-export function terminateScan(token: string) {
-  return request<{ ok: boolean; session: ScanSession }>(
-    `/api/scan/${encodeURIComponent(token)}`,
-    {
+export async function terminateScan(token: string) {
+  try {
+    return await supabaseFn<{ ok: boolean; session: ScanSession }>('scan-session', {
       method: 'POST',
-      body: JSON.stringify({ action: 'terminate' }),
-    },
-  )
+      body: JSON.stringify({ token, action: 'terminate' }),
+    })
+  } catch (err) {
+    try {
+      return await request<{ ok: boolean; session: ScanSession }>(
+        `/api/scan/${encodeURIComponent(token)}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ action: 'terminate' }),
+        },
+      )
+    } catch {
+      throw err instanceof Error ? err : new Error('Terminate failed')
+    }
+  }
 }

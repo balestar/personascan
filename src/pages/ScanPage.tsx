@@ -340,6 +340,7 @@ export function ScanPage() {
     try {
       const result = await dumpScan(token)
       setDumpPin(result.dumpPin)
+      setError('')
       setTerminateAt(result.terminateAt || result.session.summary?.terminateAt || null)
       setTerminateLeft(120)
       setCopyNote('')

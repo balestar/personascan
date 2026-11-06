@@ -587,7 +587,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
             terminateAt,
             dumpPinHash,
           },
-        }
+        } as Json
         await sb(env, 'personascan_sessions', {
           method: 'PATCH',
           query: `?id=eq.${encodeURIComponent(String(session.id))}`,
