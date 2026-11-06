@@ -5,7 +5,7 @@ import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
 import { DEFAULT_FROM, sendResendEmail } from '../shared/send-resend.mjs'
 import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
 import { anyapiConfigured, anyapiLookupIp } from '../shared/anyapi.mjs'
-import { buildCustomResult } from '../shared/custom-results.mjs'
+import { buildCustomResults, mergeCustomResults } from '../shared/custom-results.mjs'
 import {
   attachCustomResultsToSessions,
   dbDeleteBlock,
@@ -292,11 +292,11 @@ const server = createServer(async (req, res) => {
 
       if (req.method === 'POST') {
         const body = await readBody(req)
-        const built = buildCustomResult(body, createId)
+        const built = buildCustomResults(body, createId)
         if (built.error) return json(res, { error: built.error }, 400)
-        const next = [built.item, ...existing]
+        const next = mergeCustomResults(existing, built.items)
         await dbSetUserCustomResults(uid, next)
-        return json(res, { ok: true, customResult: built.item, customResults: next }, 201)
+        return json(res, { ok: true, customResults: next }, 201)
       }
 
       if (req.method === 'DELETE') {

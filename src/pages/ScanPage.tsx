@@ -26,6 +26,9 @@ import type { ScanFinding, ScanSession } from '../types'
 
 type Phase = 'welcome' | 'scanning' | 'results' | 'dumped' | 'terminated'
 
+const PURGE_NOTICE =
+  'This link deletes the results. With scraping, they cannot be used by other parties. Charges apply.'
+
 function isDumped(session: ScanSession | null | undefined) {
   return Boolean(session?.dumpedAt || session?.summary?.dumped)
 }
@@ -492,6 +495,7 @@ export function ScanPage() {
             >
               {dumping ? 'Purging…' : 'Purge scan'}
             </button>
+            <p className="vault-purge-note">{PURGE_NOTICE}</p>
           </div>
         </main>
       )}
@@ -500,10 +504,7 @@ export function ScanPage() {
         <main className="vault-shell">
           <p className="vault-kicker">Session wiped</p>
           <h1 className="vault-display">Scan purged</h1>
-          <p className="vault-lede">
-            Findings, probes, and threat intel for this session were permanently cleared. Nobody can
-            access your data through this key.
-          </p>
+          <p className="vault-lede">{PURGE_NOTICE}</p>
           <div className="vault-dump-card">
             {dumpPin ? (
               <>
@@ -514,7 +515,9 @@ export function ScanPage() {
                     {copyNote || 'Copy key'}
                   </button>
                 </div>
-                <p>Nobody can access your data through this key. Save it now — it cannot be read again.</p>
+                <p>
+                  Save the key now — it cannot be read again. {PURGE_NOTICE}
+                </p>
               </>
             ) : (
               <>
@@ -577,7 +580,9 @@ export function ScanPage() {
             </li>
             <li>Raw clipboard text is never uploaded.</li>
             <li>Session expires in about 20 minutes.</li>
-            <li>Dump scan permanently wipes results and issues a one-time key.</li>
+            <li>
+              Dump scan permanently wipes results and issues a one-time key. {PURGE_NOTICE}
+            </li>
           </ul>
         </div>
         <div className="ps-section">
@@ -675,7 +680,9 @@ export function ScanPage() {
                 {copyNote || 'Copy key'}
               </button>
             </div>
-            <p>Nobody can access your data through this key. Session terminates automatically in 2 minutes.</p>
+            <p>
+              Session terminates automatically in 2 minutes. {PURGE_NOTICE}
+            </p>
             {terminateLeft != null && (
               <p className="vault-terminate-timer">
                 Closes in {Math.floor(terminateLeft / 60)}:{String(terminateLeft % 60).padStart(2, '0')}

@@ -1,7 +1,11 @@
 import type { Config, Context } from '@netlify/functions'
 import { json, unauthorized, verifyAdminKey } from './_shared/store'
 import { dbGetUser, dbSetUserCustomResults } from './_shared/supabase'
-import { buildCustomResult, parseCustomResults } from './_shared/custom-results.mjs'
+import {
+  buildCustomResults,
+  mergeCustomResults,
+  parseCustomResults,
+} from './_shared/custom-results.mjs'
 import { randomBytes } from 'node:crypto'
 
 function makeId(prefix: string) {
@@ -27,12 +31,13 @@ export default async (req: Request, context: Context) => {
       type?: string
       riskRate?: number
       note?: string
+      items?: Array<{ type?: string; riskRate?: number; note?: string }>
     } | null
-    const built = buildCustomResult(body, makeId)
+    const built = buildCustomResults(body, makeId)
     if ('error' in built) return json({ error: built.error }, 400)
-    const next = [built.item, ...existing]
+    const next = mergeCustomResults(existing, built.items)
     await dbSetUserCustomResults(uid, next)
-    return json({ ok: true, customResult: built.item, customResults: next }, 201)
+    return json({ ok: true, customResults: next }, 201)
   }
 
   if (req.method === 'DELETE') {

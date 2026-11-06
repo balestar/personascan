@@ -369,17 +369,17 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
     if (method === 'GET') return json({ customResults: existing })
 
     if (method === 'POST') {
-      const { buildCustomResult } = await import('../shared/custom-results.mjs')
+      const { buildCustomResults, mergeCustomResults } = await import('../shared/custom-results.mjs')
       const body = (await request.json().catch(() => null)) as Json | null
-      const built = buildCustomResult(body, id)
+      const built = buildCustomResults(body, id)
       if (built.error) return json({ error: built.error }, 400)
-      const next = [built.item, ...existing]
+      const next = mergeCustomResults(existing, built.items)
       await sb(env, 'personascan_users', {
         method: 'PATCH',
         query: `?id=eq.${encodeURIComponent(uid)}`,
         body: JSON.stringify({ custom_results: next }),
       })
-      return json({ ok: true, customResult: built.item, customResults: next }, 201)
+      return json({ ok: true, customResults: next }, 201)
     }
 
     if (method === 'DELETE') {

@@ -81,9 +81,16 @@ export function addCustomResult(
   userId: string,
   payload: { type: string; riskRate: number; note?: string },
 ) {
-  return request<{ ok: boolean; customResult: CustomResult; customResults: CustomResult[] }>(
+  return addCustomResults(userId, [payload])
+}
+
+export function addCustomResults(
+  userId: string,
+  items: Array<{ type: string; riskRate: number; note?: string }>,
+) {
+  return request<{ ok: boolean; customResults: CustomResult[] }>(
     `/api/users/${encodeURIComponent(userId)}/custom-results`,
-    { method: 'POST', body: JSON.stringify(payload) },
+    { method: 'POST', body: JSON.stringify({ items }) },
     true,
   )
 }

@@ -27,3 +27,22 @@ export function buildCustomResult(
         createdAt: string
       }
     }
+
+export function buildCustomResults(
+  body: unknown,
+  makeId: (prefix: string) => string,
+):
+  | { error: string; items?: undefined }
+  | {
+      error?: undefined
+      items: Array<{
+        id: string
+        type: string
+        label: string
+        riskRate: number
+        note?: string
+        createdAt: string
+      }>
+    }
+
+export function mergeCustomResults<T extends { type: string }>(existing: T[], incoming: T[]): T[]
