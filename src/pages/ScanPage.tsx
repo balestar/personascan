@@ -88,7 +88,7 @@ export function ScanPage() {
   const [copyNote, setCopyNote] = useState('')
   const [terminateAt, setTerminateAt] = useState<string | null>(null)
   const [terminateLeft, setTerminateLeft] = useState<number | null>(null)
-  const [probesSnap, setProbesSnap] = useState<ScanProbes | null>(null)
+  const [, setProbesSnap] = useState<ScanProbes | null>(null)
   const [deviceModel, setDeviceModel] = useState(() => detectDeviceModel())
   const browser = useMemo(() => detectBrowser(), [])
 
