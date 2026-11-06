@@ -1,13 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 40" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Persona Scan">
+  <title>Persona Scan</title>
+  <rect width="64" height="64" rx="14" fill="#04140e"/>
   <defs>
-    <linearGradient id="g" x1="4" y1="20" x2="60" y2="20" gradientUnits="userSpaceOnUse">
+    <linearGradient id="ps-eye" x1="4" y1="32" x2="60" y2="32" gradientUnits="userSpaceOnUse">
       <stop stop-color="#0f7a52"/>
       <stop offset="0.45" stop-color="#3dffb0"/>
       <stop offset="1" stop-color="#b6ffd9"/>
     </linearGradient>
+    <filter id="ps-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <path d="M2 20C10 8 22 4 32 4s22 4 30 16c-8 12-20 16-30 16S10 32 2 20Z" fill="url(#g)"/>
-  <circle cx="32" cy="20" r="9.5" fill="#04140e"/>
-  <circle cx="32" cy="20" r="5.2" fill="#7cffb2"/>
-  <circle cx="34.2" cy="17.8" r="1.6" fill="#e8fff4" opacity="0.9"/>
+  <!-- BrandMark eye, centered in square favicon tile -->
+  <g transform="translate(0 12)" filter="url(#ps-glow)">
+    <path d="M2 20C10 8 22 4 32 4s22 4 30 16c-8 12-20 16-30 16S10 32 2 20Z" fill="url(#ps-eye)"/>
+    <circle cx="32" cy="20" r="9.5" fill="#04140e"/>
+    <circle cx="32" cy="20" r="5.2" fill="#7cffb2"/>
+    <circle cx="34.2" cy="17.8" r="1.6" fill="#e8fff4" opacity="0.9"/>
+  </g>
 </svg>
