@@ -169,7 +169,8 @@ export function SessionDetailModal({ open, session, userCustomResults, onClose, 
       !String(f.id || '').startsWith('intel_') &&
       f.category !== 'Optional threat intel' &&
       !String(f.id || '').startsWith('custom_') &&
-      f.category !== 'Custom results',
+      f.category !== 'Custom results' &&
+      !f.priority,
   )
   const intel = (view.threatIntel || {}) as {
     ranAt?: string

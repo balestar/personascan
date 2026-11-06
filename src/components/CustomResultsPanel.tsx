@@ -88,7 +88,7 @@ export function CustomResultsPanel({ userId, results, onChanged }: Props) {
     <div className="admin-custom">
       <div className="admin-custom-head">
         <h3>Custom results</h3>
-        <p>Tied to this user across every session. Recipients never see these flags.</p>
+        <p>Tied to this user across every session. Recipients see them as priority findings.</p>
       </div>
 
       <form className="admin-custom-form" onSubmit={onAdd}>

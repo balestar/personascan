@@ -23,27 +23,48 @@ function parseCustomResults(raw: unknown) {
   ) as Array<{ id: string; type: string; label?: string; riskRate?: number; note?: string }>
 }
 
+const RESULT_CATEGORY: Record<string, string> = {
+  bot_presence: "Device integrity",
+  unknown_rpc: "Wallets & clipboard",
+  mobile_ping: "Network & identity",
+  headless_automation: "Device integrity",
+  clipboard_clipper: "Wallets & clipboard",
+  wallet_drainer: "Wallets & clipboard",
+  session_hijack: "Network & identity",
+  gps_spoofing: "Network & identity",
+  vpn_proxy: "Network & identity",
+  emulator_root: "Device integrity",
+  malicious_sideload: "Device integrity",
+  sim_swap: "Network & identity",
+  credential_stuffing: "Wallets & clipboard",
+  phishing_kit: "Network & identity",
+  custom_other: "Device integrity",
+}
+
 function mergeCustomFindings(findings: unknown, customResults: unknown) {
   const extras = parseCustomResults(customResults).map((item) => {
     const rate = Math.min(100, Math.max(1, Math.round(Number(item.riskRate) || 1)))
+    const label = item.label || item.type
     return {
       id: `custom_${item.id}`,
-      category: "Custom results",
-      title: item.label || item.type,
+      category: RESULT_CATEGORY[item.type] || "Device integrity",
+      title: label,
       severity: rate >= 75 ? "critical" : rate >= 50 ? "high" : rate >= 25 ? "medium" : "low",
       status: rate >= 50 ? "threat" : rate >= 25 ? "warning" : "info",
       outcome: "failed",
       verdict: rate >= 50 ? "negative" : "partial",
-      detail: item.note || `${item.label || item.type} was flagged on this account.`,
+      detail: item.note || `${label} was found on this device.`,
       evidence: `Risk ${rate}/100`,
       userScore: rate,
       adminOnly: false,
+      priority: true,
     }
   })
   const rest = (Array.isArray(findings) ? findings : []).filter(
     (item) =>
       !String((item as { id?: string })?.id || "").startsWith("custom_") &&
-      (item as { category?: string })?.category !== "Custom results",
+      (item as { category?: string })?.category !== "Custom results" &&
+      !(item as { priority?: boolean })?.priority,
   )
   return extras.length ? [...extras, ...rest] : rest
 }

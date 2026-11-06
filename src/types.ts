@@ -65,6 +65,8 @@ export type ScanFinding = {
   checkedAgainst?: string
   /** ISO timestamp when a threat-intel feed was queried. */
   checkedAt?: string
+  /** Recipient sees this as a Priority finding mixed into normal results. */
+  priority?: boolean
 }
 
 export type GeoInfo = {

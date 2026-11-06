@@ -2520,6 +2520,17 @@ button.vault-session-cell:focus-visible {
   color: #ff7a7a;
 }
 
+.vault-priority {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 200, 87, 0.16);
+  color: #ffc857;
+}
+
 .vault-evidence {
   display: block;
   margin: 0.15rem 0 0.35rem;

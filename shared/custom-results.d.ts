@@ -59,6 +59,7 @@ export function customResultsToFindings(results: unknown): Array<{
   evidence: string
   userScore: number
   adminOnly: boolean
+  priority: boolean
 }>
 
 export function mergeCustomFindings(findings: unknown, customResults: unknown): unknown[]

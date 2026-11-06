@@ -13,6 +13,7 @@ export type ScanModule = {
 
 const CATEGORY_HINTS: Record<string, string[]> = {
   'Network & identity': [
+    'Network & identity',
     'Data Leaks',
     'network',
     'IP',
@@ -23,6 +24,7 @@ const CATEGORY_HINTS: Record<string, string[]> = {
     'profile',
   ],
   'Wallets & clipboard': [
+    'Wallets & clipboard',
     'Wallet',
     'Web3',
     'Transaction Tampering',
@@ -33,6 +35,7 @@ const CATEGORY_HINTS: Record<string, string[]> = {
     'API key',
   ],
   'Device integrity': [
+    'Device integrity',
     'Bots',
     'Frida',
     'Cryptojacking',
@@ -134,13 +137,10 @@ export function assignFindingsToModules(
 ): ScanModule[] {
   const visible = findings.filter((f) => isUserFacingFinding(f) && !(f as { adminOnly?: boolean }).adminOnly)
   const used = new Set<string>()
-  const custom = visible.filter(
-    (f) => f.category === 'Custom results' || String(f.id || '').startsWith('custom_'),
-  )
-  custom.forEach((f) => used.add(f.id))
   const next = modules.map((mod) => {
     const matched = visible.filter((f) => !used.has(f.id) && matchesGroup(f, mod.title))
     matched.forEach((f) => used.add(f.id))
+    matched.sort((a, b) => Number(Boolean(b.priority)) - Number(Boolean(a.priority)))
     return {
       ...mod,
       findings: matched,
@@ -148,16 +148,6 @@ export function assignFindingsToModules(
       status: 'done' as const,
     }
   })
-  if (custom.length) {
-    next.unshift({
-      id: 'Custom results',
-      title: 'Custom results',
-      items: [],
-      findings: custom,
-      score: scoreFindings(custom),
-      status: 'done',
-    })
-  }
 
   const orphan = visible.filter((f) => !used.has(f.id))
   if (orphan.length) {

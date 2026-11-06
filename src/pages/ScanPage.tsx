@@ -484,7 +484,10 @@ export function ScanPage() {
                 >
                   <div>
                     <strong>{mod.title}</strong>
-                    <span>{formatOutcomeCounts(mod.findings)}</span>
+                    <span>
+                      {formatOutcomeCounts(mod.findings)}
+                      {mod.findings.some((f) => f.priority) ? ' · Priority' : ''}
+                    </span>
                   </div>
                   <em>{mod.findings.length}</em>
                 </button>
@@ -638,6 +641,7 @@ export function ScanPage() {
                     <span className={`vault-verdict vault-verdict--${outcome}`}>
                       {outcomeLabel(outcome)}
                     </span>
+                    {f.priority ? <span className="vault-priority">Priority</span> : null}
                   </div>
                   <strong>{f.title}</strong>
                   <p>{f.detail}</p>
