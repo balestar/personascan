@@ -3,7 +3,13 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { BrandMark } from '../components/BrandMark'
 import { Sheet } from '../components/Sheet'
 import { dumpScan, getScanSession, runScan, terminateScan } from '../lib/api'
-import { collectDeviceInfo, detectDeviceModel, publicSessionCode, refineDeviceModel } from '../lib/device'
+import {
+  collectDeviceInfo,
+  detectBrowser,
+  detectDeviceModel,
+  publicSessionCode,
+  refineDeviceModel,
+} from '../lib/device'
 import { runRealDeviceScan, type ScanProbes } from '../lib/realScanner'
 import { SCAN_COVERAGE } from '../lib/scanCoverage'
 import {
@@ -23,15 +29,41 @@ function isDumped(session: ScanSession | null | undefined) {
   return Boolean(session?.dumpedAt || session?.summary?.dumped)
 }
 
-function SessionMeta({ code, model }: { code: string; model: string }) {
+function SessionMeta({
+  code,
+  model,
+  browser,
+  variant = 'compact',
+}: {
+  code: string
+  model: string
+  browser: string
+  variant?: 'compact' | 'hero'
+}) {
+  const [copied, setCopied] = useState(false)
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code.replace(/-/g, ''))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
-    <div className="vault-session-meta">
-      <span className="vault-session-id" title="Session ID">
-        {code}
-      </span>
-      <span className="vault-session-device" title="Detected device">
-        {model}
-      </span>
+    <div className={`vault-session-meta vault-session-meta--${variant}`}>
+      <button type="button" className="vault-session-cell" onClick={() => void copyCode()} title="Copy session ID">
+        <span className="vault-session-label">{copied ? 'Copied' : 'Session'}</span>
+        <strong className="vault-session-id">{code}</strong>
+        {variant === 'hero' ? <span className="vault-session-sub">{copied ? 'ID copied' : 'Tap to copy'}</span> : null}
+      </button>
+      <div className="vault-session-cell" title="Detected device">
+        <span className="vault-session-label">Device</span>
+        <strong className="vault-session-device">{model || 'Detecting…'}</strong>
+        {variant === 'hero' ? <span className="vault-session-sub">{browser}</span> : null}
+      </div>
     </div>
   )
 }
@@ -58,6 +90,7 @@ export function ScanPage() {
   const [terminateLeft, setTerminateLeft] = useState<number | null>(null)
   const [probesSnap, setProbesSnap] = useState<ScanProbes | null>(null)
   const [deviceModel, setDeviceModel] = useState(() => detectDeviceModel())
+  const browser = useMemo(() => detectBrowser(), [])
 
   useEffect(() => {
     if (!token) return
@@ -78,11 +111,14 @@ export function ScanPage() {
         }
         setUser(data.user)
         setSession(data.session)
-        const detected =
+        const live = detectDeviceModel()
+        const stored =
+          (data.session.device as { model?: string; name?: string } | undefined)?.model ||
           data.session.deviceName ||
           (data.session.device as { name?: string } | undefined)?.name ||
-          detectDeviceModel()
-        setDeviceModel(detected.split(' · ')[0] || detected)
+          ''
+        const storedModel = String(stored).split(' · ')[0]
+        setDeviceModel(live || storedModel)
         if (data.session.probes) setProbesSnap(data.session.probes as ScanProbes)
         if (isDumped(data.session)) {
           setModules(buildModulesFromCoverage())
@@ -343,18 +379,25 @@ export function ScanPage() {
   const expired = session.status === 'expired' || minutesLeft === 0
 
   return (
-    <div className="vault-page">
+    <div className={`vault-page${phase === 'welcome' ? ' vault-page--welcome' : ''}`}>
       <header className="vault-topbar">
         <div className="vault-brand">
           <BrandMark size="sm" />
           <span>Persona Scan</span>
         </div>
-        <SessionMeta code={sessionCode} model={deviceModel} />
+        {phase !== 'welcome' ? (
+          <SessionMeta code={sessionCode} model={deviceModel} browser={browser} variant="compact" />
+        ) : null}
       </header>
 
       {phase === 'welcome' && (
         <main className="vault-shell vault-shell--start">
-          <SessionMeta code={sessionCode} model={deviceModel} />
+          <p className="vault-kicker">This device</p>
+          <h1 className="vault-display">Ready to scan</h1>
+          <p className="vault-lede vault-lede--start">
+            Session is bound to the ID and device below. Checks run in this browser.
+          </p>
+          <SessionMeta code={sessionCode} model={deviceModel} browser={browser} variant="hero" />
           <div className="vault-actions">
             <button
               type="button"
@@ -385,7 +428,6 @@ export function ScanPage() {
 
       {phase === 'scanning' && (
         <main className="vault-shell">
-          <SessionMeta code={sessionCode} model={deviceModel} />
           <div className="vault-progress-wrap">
             <div className="vault-ring" style={{ ['--p' as string]: String(progress) }}>
               <div className="vault-ring-inner">

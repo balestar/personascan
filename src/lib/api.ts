@@ -177,6 +177,7 @@ export function getScanSession(
   token: string,
   device?: {
     name: string
+    model?: string
     userAgent?: string
     platform?: string
     language?: string
@@ -202,6 +203,7 @@ export function runScan(
     probes: object
     device?: {
       name: string
+      model?: string
       userAgent?: string
       platform?: string
       language?: string

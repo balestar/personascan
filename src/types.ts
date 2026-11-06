@@ -57,6 +57,7 @@ export type GeoInfo = {
 
 export type DeviceInfo = {
   name: string
+  model?: string
   userAgent?: string
   platform?: string
   language?: string
