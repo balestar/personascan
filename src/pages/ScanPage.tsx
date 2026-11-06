@@ -3,8 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { BrandMark } from '../components/BrandMark'
 import { Sheet } from '../components/Sheet'
 import { dumpScan, getScanSession, runScan, terminateScan } from '../lib/api'
-import { flagForCountry, flagFromCode } from '../lib/countryFlag'
-import { collectDeviceInfo } from '../lib/device'
+import { collectDeviceInfo, detectDeviceModel, publicSessionCode, refineDeviceModel } from '../lib/device'
 import { runRealDeviceScan, type ScanProbes } from '../lib/realScanner'
 import { SCAN_COVERAGE } from '../lib/scanCoverage'
 import {
@@ -20,87 +19,20 @@ import type { ScanFinding, ScanSession } from '../types'
 
 type Phase = 'welcome' | 'scanning' | 'results' | 'dumped' | 'terminated'
 
-type IdentityView = {
-  flag: string
-  countryLabel: string
-  emails: string[]
-  phones: string[]
-  networks: string[]
-}
-
 function isDumped(session: ScanSession | null | undefined) {
   return Boolean(session?.dumpedAt || session?.summary?.dumped)
 }
 
-function buildIdentity(
-  user: { email: string; country: string },
-  probes?: ScanProbes | Record<string, unknown> | null,
-): IdentityView {
-  const p = (probes || {}) as ScanProbes
-  const id = p.identity
-  const code = id?.countryCode || p.ipGeo?.countryCode
-  const countryName = id?.country || p.ipGeo?.country || user.country
-  const flag = code ? flagFromCode(code) : flagForCountry(user.country)
-  const emails = [...new Set([user.email, ...(id?.emails || [])].filter(Boolean))]
-  const phones = [...new Set(id?.phones || [])]
-  const networks = [...new Set(id?.networks || [])]
-  if (!networks.length && id?.isp) networks.push(id.isp)
-  if (!networks.length && p.ipGeo?.isp) networks.push(String(p.ipGeo.isp))
-
-  return {
-    flag,
-    countryLabel: countryName || user.country,
-    emails,
-    phones,
-    networks,
-  }
-}
-
-function IdentityCard({ identity }: { identity: IdentityView }) {
+function SessionMeta({ code, model }: { code: string; model: string }) {
   return (
-    <section className="vault-id">
-      <div className="vault-id-flag">
-        <span className="vault-flag" aria-hidden>
-          {identity.flag}
-        </span>
-        <div>
-          <strong>{identity.countryLabel}</strong>
-          <span>Detected country</span>
-        </div>
-      </div>
-      <div className="vault-id-grid">
-        <div>
-          <h3>Emails</h3>
-          <ul>
-            {identity.emails.length ? (
-              identity.emails.map((e) => <li key={e}>{e}</li>)
-            ) : (
-              <li className="vault-id-empty">None detected</li>
-            )}
-          </ul>
-        </div>
-        <div>
-          <h3>Numbers</h3>
-          <ul>
-            {identity.phones.length ? (
-              identity.phones.map((n) => <li key={n}>{n}</li>)
-            ) : (
-              <li className="vault-id-empty">None detected</li>
-            )}
-          </ul>
-        </div>
-        <div className="vault-id-wide">
-          <h3>Networks</h3>
-          <ul>
-            {identity.networks.length ? (
-              identity.networks.map((n) => <li key={n}>{n}</li>)
-            ) : (
-              <li className="vault-id-empty">Resolving…</li>
-            )}
-          </ul>
-        </div>
-      </div>
-    </section>
+    <div className="vault-session-meta">
+      <span className="vault-session-id" title="Session ID">
+        {code}
+      </span>
+      <span className="vault-session-device" title="Detected device">
+        {model}
+      </span>
+    </div>
   )
 }
 
@@ -125,6 +57,7 @@ export function ScanPage() {
   const [terminateAt, setTerminateAt] = useState<string | null>(null)
   const [terminateLeft, setTerminateLeft] = useState<number | null>(null)
   const [probesSnap, setProbesSnap] = useState<ScanProbes | null>(null)
+  const [deviceModel, setDeviceModel] = useState(() => detectDeviceModel())
 
   useEffect(() => {
     if (!token) return
@@ -145,6 +78,11 @@ export function ScanPage() {
         }
         setUser(data.user)
         setSession(data.session)
+        const detected =
+          data.session.deviceName ||
+          (data.session.device as { name?: string } | undefined)?.name ||
+          detectDeviceModel()
+        setDeviceModel(detected.split(' · ')[0] || detected)
         if (data.session.probes) setProbesSnap(data.session.probes as ScanProbes)
         if (isDumped(data.session)) {
           setModules(buildModulesFromCoverage())
@@ -174,6 +112,16 @@ export function ScanPage() {
       .finally(() => {
         if (alive) setLoading(false)
       })
+    return () => {
+      alive = false
+    }
+  }, [token])
+
+  useEffect(() => {
+    let alive = true
+    void refineDeviceModel(deviceModel).then((next) => {
+      if (alive && next) setDeviceModel(next)
+    })
     return () => {
       alive = false
     }
@@ -232,10 +180,7 @@ export function ScanPage() {
     [modules],
   )
 
-  const identity = useMemo(() => {
-    if (!user) return null
-    return buildIdentity(user, probesSnap || (session?.probes as ScanProbes | undefined))
-  }, [user, probesSnap, session])
+  const sessionCode = useMemo(() => publicSessionCode(session?.id), [session?.id])
 
   const closeTerms = useCallback(() => {
     if (!running) setTermsOpen(false)
@@ -396,7 +341,6 @@ export function ScanPage() {
   }
 
   const expired = session.status === 'expired' || minutesLeft === 0
-  const flag = identity?.flag || flagForCountry(user.country)
 
   return (
     <div className="vault-page">
@@ -405,24 +349,12 @@ export function ScanPage() {
           <BrandMark size="sm" />
           <span>Persona Scan</span>
         </div>
-        <span className="vault-chip">
-          {flag} {expired ? 'Expired' : `${minutesLeft} min`} · {user.country}
-        </span>
+        <SessionMeta code={sessionCode} model={deviceModel} />
       </header>
 
       {phase === 'welcome' && (
-        <main className="vault-shell">
-          <p className="vault-kicker">Secured invite</p>
-          <h1 className="vault-display">
-            <span className="vault-flag-inline">{flag}</span> {user.name}
-          </h1>
-          <p className="vault-lede">
-            Live device scan for <strong>{user.email}</strong>. Country, networks, and browser
-            signals are scored from real probes.
-          </p>
-
-          {identity && <IdentityCard identity={identity} />}
-
+        <main className="vault-shell vault-shell--start">
+          <SessionMeta code={sessionCode} model={deviceModel} />
           <div className="vault-actions">
             <button
               type="button"
@@ -453,6 +385,7 @@ export function ScanPage() {
 
       {phase === 'scanning' && (
         <main className="vault-shell">
+          <SessionMeta code={sessionCode} model={deviceModel} />
           <div className="vault-progress-wrap">
             <div className="vault-ring" style={{ ['--p' as string]: String(progress) }}>
               <div className="vault-ring-inner">
@@ -466,8 +399,6 @@ export function ScanPage() {
               <div style={{ width: `${progress}%` }} />
             </div>
           </div>
-
-          {identity && <IdentityCard identity={identity} />}
 
           <ul className="vault-modules">
             {modules.map((mod) => (
@@ -514,8 +445,6 @@ export function ScanPage() {
               </span>
             </div>
           </div>
-
-          {identity && <IdentityCard identity={identity} />}
 
           <p className="vault-hint">Tap a category for findings and per-check scores.</p>
 
