@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import { BrandMark } from '../components/BrandMark'
 import { Sheet } from '../components/Sheet'
 import { dumpScan, getScanSession, runScan, terminateScan } from '../lib/api'
@@ -357,20 +357,10 @@ export function ScanPage() {
 
   if (!user || !session) {
     return (
-      <div className="vault-page">
-        <header className="vault-topbar">
-          <Link to="/" className="vault-brand">
-            <BrandMark size="sm" />
-            Persona Scan
-          </Link>
-        </header>
-        <main className="vault-shell vault-center">
+      <div className="vault-page vault-page--unavailable">
+        <main className="vault-unavailable">
           <h1>Session unavailable</h1>
           <p>{error || 'This scan link is invalid or expired.'}</p>
-          <p className="vault-hint">Use a session link from Admin → Open scan.</p>
-          <Link className="vault-btn vault-btn-glow" to="/admin">
-            Back to admin
-          </Link>
         </main>
       </div>
     )
