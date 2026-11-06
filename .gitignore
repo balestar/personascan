@@ -14,6 +14,20 @@ dist-ssr
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.cf-secrets.tmp.env
+.wrangler
+.wrangler-bundle/
+
+# Local Cloudflare upload scratch (do not commit)
+scripts/_b64_*.txt
+scripts/_upload-code.js
+worker/cf-bundle.js
+worker/cf-bundle.js.gz.b64
+worker/_part*.js
+worker/_gz*.txt
 
 # Netlify
 .netlify

@@ -31,6 +31,12 @@ const T = {
 
 function env(name: string) {
   try {
+    const bag = (globalThis as { __PERSONASCAN_ENV__?: Record<string, string> }).__PERSONASCAN_ENV__
+    if (bag?.[name]) return bag[name]
+  } catch {
+    /* ignore */
+  }
+  try {
     // Netlify runtime
     const Netlify = (globalThis as { Netlify?: { env?: { get?: (k: string) => string | undefined } } })
       .Netlify
@@ -39,7 +45,11 @@ function env(name: string) {
   } catch {
     /* ignore */
   }
-  return process.env[name] || ''
+  try {
+    return process.env[name] || ''
+  } catch {
+    return ''
+  }
 }
 
 let client: SupabaseClient | null = null

@@ -1,0 +1,12 @@
+# Copy to .dev.vars for local `wrangler dev` (never commit .dev.vars)
+ADMIN_KEY=personascan-admin
+SUPABASE_URL=https://hxapjyxzvmouwrhdgmsx.supabase.co
+SUPABASE_ANON_KEY=
+SCAN_SITE_URL=https://secure.personascan.net
+SITE_URL=https://secure.personascan.net
+
+# Optional — without these, threat intel providers skip (no fake results)
+# GOOGLE_SAFE_BROWSING_API_KEY=
+# VIRUSTOTAL_API_KEY=
+# SCAMSNIFFER_API_KEY=
+# BLOCKAID_API_KEY=

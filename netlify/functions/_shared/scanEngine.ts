@@ -12,11 +12,16 @@ export function summarize(findings: ScanFinding[]) {
  * Base URL for generated /scan/:token links.
  * Marketing site stays personascan.net; scan sessions use secure.personascan.net.
  */
+function runtimeEnv(name: string) {
+  const bag = (globalThis as { __PERSONASCAN_ENV__?: Record<string, string> }).__PERSONASCAN_ENV__
+  return bag?.[name] || process.env[name] || ''
+}
+
 export function siteUrl(req: Request) {
   const scanUrl =
-    process.env.SCAN_SITE_URL ||
-    process.env.SECURE_SITE_URL ||
-    process.env.SITE_URL
+    runtimeEnv('SCAN_SITE_URL') ||
+    runtimeEnv('SECURE_SITE_URL') ||
+    runtimeEnv('SITE_URL')
   if (scanUrl) return scanUrl.replace(/\/$/, '')
 
   try {

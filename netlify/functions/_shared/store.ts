@@ -68,7 +68,8 @@ export function hashAdminPassword(password: string) {
 }
 
 export function verifyAdminKey(provided: string | null) {
-  const expected = process.env.ADMIN_KEY || 'personascan-admin'
+  const bag = (globalThis as { __PERSONASCAN_ENV__?: Record<string, string> }).__PERSONASCAN_ENV__
+  const expected = bag?.ADMIN_KEY || process.env.ADMIN_KEY || 'personascan-admin'
   if (!provided) return false
   const a = Buffer.from(provided)
   const b = Buffer.from(expected)

@@ -1,48 +1,34 @@
-/** Coverage advertised for the live browser-session scanner (real probes + threat intel). */
+/** Coverage for the live browser-session scanner.
+ * Browser probes always run. External threat APIs only run when secrets are set.
+ */
 export const SCAN_COVERAGE = [
   {
-    group: 'Live network & identity',
+    group: 'Live browser probes (always real)',
     items: [
       'Public IP resolution',
       'IP geolocation / ISP',
       'WebRTC local IP leak',
       'Secure HTTPS context',
+      'Injected wallet providers',
+      'Clipboard + storage secret patterns',
+      'Webdriver / automation heuristics',
+      'Frida / instrumentation signals (web heuristics)',
     ],
   },
   {
-    group: 'Crypto wallet surface',
+    group: 'Threat intel APIs (need Worker secrets)',
     items: [
-      'Injected Ethereum providers',
-      'MetaMask / Coinbase / Trust detection',
-      'Phantom / Solana injection',
-      'Multiple wallet injector risk',
+      'Google Safe Browsing — needs GOOGLE_SAFE_BROWSING_API_KEY',
+      'VirusTotal — needs VIRUSTOTAL_API_KEY',
+      'ScamSniffer / Blockaid / PhishTank — need their API keys',
+      'NVD CVE · Snyk · MobSF · ClamAV — need endpoints/keys',
     ],
   },
   {
-    group: 'Clipboard & secrets',
+    group: 'Native-only (not available in a web page)',
     items: [
-      'Live clipboard read (Fetch gesture)',
-      'Seed / private-key / API-key patterns',
-      'Crypto address clipper check',
-      'Browser storage secret patterns',
-    ],
-  },
-  {
-    group: 'SDK & runtime integrity',
-    items: [
-      'Frida / instrumentation heuristics',
-      'Play Integrity bridge (native agent)',
-      'Approov / AppSealing / DexGuard hooks',
-      'Webdriver / headless automation',
-    ],
-  },
-  {
-    group: 'Threat intel APIs',
-    items: [
-      'Google Safe Browsing',
-      'VirusTotal · PhishTank · ScamSniffer · Blockaid',
-      'NVD CVE · Snyk · MobSF',
-      'YARA + ClamAV (builtin + external)',
+      'Play Integrity — Android app + decode service',
+      'AppSealing / DexGuard / Approov — sealed native SDK',
     ],
   },
 ] as const

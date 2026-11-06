@@ -5,7 +5,18 @@
  */
 
 function env(name, fallback = '') {
-  return (process.env[name] || fallback).trim()
+  try {
+    const bag = globalThis.__PERSONASCAN_ENV__
+    if (bag && typeof bag[name] === 'string' && bag[name]) return String(bag[name]).trim()
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof process !== 'undefined' && process.env?.[name]) return String(process.env[name]).trim()
+  } catch {
+    /* ignore */
+  }
+  return String(fallback || '').trim()
 }
 
 function timeout(ms, promise, label) {

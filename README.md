@@ -3,44 +3,77 @@
 Secured device threat scans for [personascan.net](https://personascan.net).
 Scan invites open on [secure.personascan.net](https://secure.personascan.net).
 
-Admins create users (name, email, country), generate a secured invite link, and send it to the recipient. The recipient opens the link, accepts the secure-scan terms, taps **Fetch scan**, and receives a report covering IP leaks, password leaks, unknown API traffic, personal-data apps, ads SDKs, bots, cryptographic posture, and related categories.
+Admins create users (name, email, country), generate a secured invite link, and send it to the recipient. The recipient opens the link, accepts the secure-scan terms, taps **Fetch scan**, and receives a dual-verified report from live browser probes plus optional threat-intel APIs.
 
 ## Stack
 
 - Vite + React + TypeScript
-- Netlify Functions + Blobs
-- React Router
+- Cloudflare Workers (static assets + `/api/*`) via Wrangler
+- Supabase (`personascan_*` tables)
+- Shared dual-verify + threat-intel modules
+
+## How scans work
+
+1. **Invite** — admin creates a user → Worker stores a one-time token in Supabase → link is `https://secure.personascan.net/scan/<token>`.
+2. **Browser probes (always real)** — the recipient page runs `realScanner` in their browser: WebRTC leak checks, public IP/geo, wallet injection, clipboard/storage secret patterns, automation/Frida heuristics, etc.
+3. **Server dual-verify** — `/api/scan/:token` builds findings from those probes, then runs `runThreatIntel` and merges device + API/server signals (`dual-verify`).
+4. **Threat intel APIs (only if secrets exist)** — Safe Browsing, VirusTotal, ScamSniffer, Blockaid, etc. **skip** when their keys are missing. Skipped providers produce **no fake hits**.
+5. **Native-only checks** — Play Integrity, AppSealing, DexGuard, Approov cannot run inside a normal web page; they stay skipped unless a native agent posts tokens.
+
+### Why scans can look “not real”
+
+- Most external providers are **skipped** until you set API keys as Cloudflare Worker secrets (runtime) and Workers Builds secrets (build, if used).
+- Browser probes are real but limited: they inspect the **web session**, not a full installed-antivirus or MDM scan of the phone/PC.
+- Native attestation APIs never fire from the web vault alone.
+- Older random/simulated engines were removed; clear results usually mean “nothing found in what we can observe,” not “device is perfectly clean.”
 
 ## Local development
 
 ```bash
-pnpm install   # or: npm install
+pnpm install
 cp .env.example .env
-# default local ADMIN_KEY is personascan-admin
+# fill ADMIN_KEY + SUPABASE_ANON_KEY (and optional threat keys)
 pnpm dev
 ```
 
 - Site: `http://localhost:5173`
 - Admin: `http://localhost:5173/admin` (sign in with `ADMIN_KEY`)
-- Scan links: `/scan/<token>`
-- Local API: `http://localhost:8888` (started automatically by `pnpm dev`)
+- Local API: `http://localhost:8888`
 
-## Deploy (Netlify)
+## Cloudflare deploy + secrets
 
-1. Connect this repo to Netlify (or `npx netlify deploy`).
-2. Set `ADMIN_KEY` and `SCAN_SITE_URL=https://secure.personascan.net` (scan links only).
-3. Attach marketing domain `personascan.net` and scan host `secure.personascan.net`.
+Secrets must exist in **both** places Cloudflare uses:
+
+1. **Runtime (Worker)** — required for `/api` and threat intel during scans  
+2. **Workers Builds** — required if CI builds on Cloudflare (build vars are separate from runtime)
+
+```bash
+# 1) Put secrets from .env into the Worker (runtime)
+pnpm cf:secrets
+
+# 2) Build + deploy Worker + assets to secure.personascan.net
+pnpm cf:deploy
+```
+
+Also mirror the same secret names under  
+**Workers & Pages → personascan → Settings → Build → Variables and secrets**  
+so build and deploy share the same keys.
+
+Required runtime secrets: `ADMIN_KEY`, `SUPABASE_ANON_KEY`  
+Optional (enable real API intel): `VIRUSTOTAL_API_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY`, `SCAMSNIFFER_API_KEY`, `BLOCKAID_API_KEY`, …
+
+Non-secret vars live in `wrangler.jsonc`: `SCAN_SITE_URL`, `SITE_URL`, `SUPABASE_URL`.
 
 ## Admin flow
 
 1. Open `/admin` and sign in with the admin key.
-2. Create a user with name, email, and country — a secured link is generated automatically.
-3. Copy the link and send it to the user.
-4. Regenerate links anytime from the users list.
+2. Create a user — a secured link is generated automatically.
+3. Copy / email the link.
+4. Open the live scan link to watch dual-verified results.
 
 ## Scan flow
 
 1. User opens the secured link.
-2. Reviews coverage categories and accepts: *Persona Scan scans are secure*.
-3. Clicks **Fetch scan**.
-4. Sees findings for each threat category.
+2. Reviews coverage (probes vs API keys vs native-only).
+3. Accepts terms → **Fetch scan**.
+4. Sees dual-verified findings; admin detail shows device + API sides.
