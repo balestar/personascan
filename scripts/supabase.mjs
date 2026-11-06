@@ -35,6 +35,13 @@ const T = {
   settings: 'personascan_settings',
 }
 
+function parseCustomResults(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item) => item && typeof item === 'object' && typeof item.id === 'string' && typeof item.type === 'string',
+  )
+}
+
 export function mapUser(row) {
   if (!row) return null
   return {
@@ -49,6 +56,7 @@ export function mapUser(row) {
     lastScanStatus: row.last_scan_status || undefined,
     lastSeenAt: row.last_seen_at || undefined,
     lastIp: row.last_ip || undefined,
+    customResults: parseCustomResults(row.custom_results),
   }
 }
 
@@ -103,6 +111,25 @@ export async function dbGetUser(id) {
   return mapUser(data)
 }
 
+export async function dbSetUserCustomResults(userId, customResults) {
+  const { error } = await supabase
+    .from(T.users)
+    .update({ custom_results: customResults })
+    .eq('id', userId)
+  if (error) throw error
+  return customResults
+}
+
+export async function attachCustomResultsToSessions(sessions) {
+  const list = (sessions || []).filter(Boolean)
+  const ids = [...new Set(list.map((s) => s.userId).filter(Boolean))]
+  if (!ids.length) return list.map((s) => ({ ...s, customResults: s.customResults || [] }))
+  const { data, error } = await supabase.from(T.users).select('id, custom_results').in('id', ids)
+  if (error) throw error
+  const map = Object.fromEntries((data || []).map((u) => [u.id, parseCustomResults(u.custom_results)]))
+  return list.map((s) => ({ ...s, customResults: map[s.userId] || [] }))
+}
+
 export async function dbUpsertUser(user) {
   const row = {
     id: user.id,
@@ -117,6 +144,7 @@ export async function dbUpsertUser(user) {
     last_seen_at: user.lastSeenAt || null,
     last_ip: user.lastIp || null,
   }
+  if (Array.isArray(user.customResults)) row.custom_results = user.customResults
   const { error } = await supabase.from(T.users).upsert(row)
   if (error) throw error
   return user

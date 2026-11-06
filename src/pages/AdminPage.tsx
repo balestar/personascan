@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { BrandMark } from '../components/BrandMark'
 import { CreateUserModal } from '../components/CreateUserModal'
+import { CustomResultsPanel } from '../components/CustomResultsPanel'
 import { EmailModal } from '../components/EmailModal'
 import { SessionDetailModal } from '../components/SessionDetailModal'
 import { ToastStack, useToasts } from '../components/Toast'
@@ -25,6 +26,7 @@ import {
   removeGeoBlock,
   setAdminKey,
 } from '../lib/api'
+import { riskBand } from '../lib/customResults'
 import type { ActiveScan, GeoBlock, ScanSession, UserRecord } from '../types'
 
 type Tab = 'users' | 'active' | 'geo'
@@ -441,7 +443,24 @@ export function AdminPage() {
                             <span className="admin-meta">
                               {user.email} · {user.country} · {userSessions.length} session
                               {userSessions.length === 1 ? '' : 's'}
+                              {(user.customResults?.length || 0) > 0
+                                ? ` · ${user.customResults?.length} custom (max ${Math.max(
+                                    ...(user.customResults || []).map((r) => r.riskRate),
+                                  )})`
+                                : ''}
                             </span>
+                            {(user.customResults?.length || 0) > 0 ? (
+                              <span className="admin-custom-chips">
+                                {(user.customResults || []).slice(0, 3).map((item) => (
+                                  <span
+                                    key={item.id}
+                                    className={`risk-chip risk-chip--${riskBand(item.riskRate)}`}
+                                  >
+                                    {item.label} {item.riskRate}
+                                  </span>
+                                ))}
+                              </span>
+                            ) : null}
                           </span>
                         </button>
                         <div className="admin-actions">
@@ -459,6 +478,11 @@ export function AdminPage() {
 
                       {isOpen && (
                         <div className="admin-sessions">
+                          <CustomResultsPanel
+                            userId={user.id}
+                            results={user.customResults || []}
+                            onChanged={() => refresh({ quiet: true })}
+                          />
                           {userSessions.length === 0 ? (
                             <p className="admin-empty">No sessions yet.</p>
                           ) : (
@@ -716,6 +740,9 @@ export function AdminPage() {
       <SessionDetailModal
         open={detailOpen}
         session={selectedSession}
+        userCustomResults={
+          users.find((u) => u.id === selectedSession?.userId)?.customResults || []
+        }
         onClose={() => setDetailOpen(false)}
         onCancel={
           selectedSession?.id &&

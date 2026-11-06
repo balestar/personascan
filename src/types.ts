@@ -1,3 +1,12 @@
+export type CustomResult = {
+  id: string
+  type: string
+  label: string
+  riskRate: number
+  note?: string
+  createdAt: string
+}
+
 export type UserRecord = {
   id: string
   name: string
@@ -11,6 +20,8 @@ export type UserRecord = {
   lastSeenAt?: string
   lastIp?: string
   sessionCount?: number
+  /** Admin-authored flags that follow this user across every session. */
+  customResults?: CustomResult[]
 }
 
 export type FindingOutcome = 'passed' | 'failed' | 'couldnt_run'
@@ -118,6 +129,8 @@ export type ScanSession = {
   threatIntel?: Record<string, unknown>
   dumpedAt?: string
   link: string
+  /** Copied from the user record so every session shows the same admin flags. */
+  customResults?: CustomResult[]
 }
 
 /** @deprecated prefer ScanSession — kept for result list compatibility */

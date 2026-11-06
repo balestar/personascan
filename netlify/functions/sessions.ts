@@ -8,6 +8,7 @@ import {
   type UserRecord,
 } from './_shared/store'
 import {
+  attachCustomResultsToSessions,
   dbGetSession,
   dbListSessions,
   dbUpsertSession,
@@ -71,13 +72,15 @@ export default async (req: Request, context: Context) => {
   if (req.method === 'GET' && id) {
     const session = await getSessionRecord(id)
     if (!session) return json({ error: 'Session not found' }, 404)
-    return json({ session })
+    const [withCustom] = await attachCustomResultsToSessions([session])
+    return json({ session: withCustom })
   }
 
   if (req.method === 'GET') {
     const userId = new URL(req.url).searchParams.get('userId') || undefined
     const sessions = await Promise.all((await dbListSessions(userId)).map((s) => refresh(s)))
-    return json({ sessions: sessions.filter(Boolean) })
+    const withCustom = await attachCustomResultsToSessions(sessions.filter(Boolean) as DbSession[])
+    return json({ sessions: withCustom })
   }
 
   return json({ error: 'Method not allowed' }, 405)

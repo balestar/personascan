@@ -1,5 +1,14 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
+export type CustomResult = {
+  id: string
+  type: string
+  label: string
+  riskRate: number
+  note?: string
+  createdAt: string
+}
+
 export type UserRecord = {
   id: string
   name: string
@@ -12,6 +21,7 @@ export type UserRecord = {
   lastScanStatus?: 'pending' | 'active' | 'completed' | 'failed' | 'blocked' | 'expired'
   lastSeenAt?: string
   lastIp?: string
+  customResults?: CustomResult[]
 }
 
 export type GeoBlock = {
@@ -98,6 +108,18 @@ export type DbSession = {
   threatIntel?: Record<string, unknown>
   dumpedAt?: string
   link: string
+  customResults?: CustomResult[]
+}
+
+function parseCustomResults(raw: unknown): CustomResult[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item): item is CustomResult =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as CustomResult).id === 'string' &&
+      typeof (item as CustomResult).type === 'string',
+  )
 }
 
 export function mapUser(row: Record<string, unknown> | null): UserRecord | null {
@@ -114,6 +136,7 @@ export function mapUser(row: Record<string, unknown> | null): UserRecord | null 
     lastScanStatus: (row.last_scan_status as UserRecord['lastScanStatus']) || undefined,
     lastSeenAt: (row.last_seen_at as string) || undefined,
     lastIp: (row.last_ip as string) || undefined,
+    customResults: parseCustomResults(row.custom_results),
   }
 }
 
@@ -171,6 +194,32 @@ export async function dbGetUser(id: string) {
   return mapUser(data)
 }
 
+export async function dbSetUserCustomResults(userId: string, customResults: CustomResult[]) {
+  const { error } = await getSupabase()
+    .from(T.users)
+    .update({ custom_results: customResults })
+    .eq('id', userId)
+  if (error) throw error
+  return customResults
+}
+
+export async function attachCustomResultsToSessions<T extends { userId: string; customResults?: CustomResult[] }>(
+  sessions: T[],
+): Promise<T[]> {
+  const list = sessions.filter(Boolean)
+  const ids = [...new Set(list.map((s) => s.userId).filter(Boolean))]
+  if (!ids.length) return list.map((s) => ({ ...s, customResults: s.customResults || [] }))
+  const { data, error } = await getSupabase().from(T.users).select('id, custom_results').in('id', ids)
+  if (error) throw error
+  const map = Object.fromEntries(
+    (data || []).map((u: { id: string; custom_results?: unknown }) => [
+      u.id,
+      parseCustomResults(u.custom_results),
+    ]),
+  )
+  return list.map((s) => ({ ...s, customResults: map[s.userId] || [] }))
+}
+
 export async function dbUpsertUser(user: UserRecord) {
   const { error } = await getSupabase().from(T.users).upsert({
     id: user.id,
@@ -184,6 +233,7 @@ export async function dbUpsertUser(user: UserRecord) {
     last_scan_status: user.lastScanStatus || null,
     last_seen_at: user.lastSeenAt || null,
     last_ip: user.lastIp || null,
+    ...(Array.isArray(user.customResults) ? { custom_results: user.customResults } : {}),
   })
   if (error) throw error
   return user

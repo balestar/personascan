@@ -3132,6 +3132,141 @@ button.vault-session-cell:focus-visible {
   gap: 0.55rem;
 }
 
+.admin-custom-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.admin-custom {
+  padding: 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(124, 255, 178, 0.14);
+  background: rgba(4, 12, 9, 0.55);
+  display: grid;
+  gap: 0.7rem;
+}
+
+.admin-custom-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #f2fff8;
+}
+
+.admin-custom-head p {
+  margin: 0.2rem 0 0;
+  color: #8eab9c;
+  font-size: 0.8rem;
+}
+
+.admin-custom-form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.admin-custom-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.admin-custom-form select,
+.admin-custom-form input[type='text'] {
+  width: 100%;
+  border: 1px solid rgba(124, 255, 178, 0.18);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: #06140f;
+  color: #e8f6ef;
+}
+
+.admin-custom-form input[type='range'] {
+  width: 100%;
+  accent-color: #7cffb2;
+}
+
+.admin-risk-row {
+  display: grid;
+  grid-template-columns: 1fr 4.5rem;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.admin-risk-row input[type='number'] {
+  width: 100%;
+  border: 1px solid rgba(124, 255, 178, 0.18);
+  border-radius: 10px;
+  padding: 0.5rem 0.55rem;
+  background: #06140f;
+  color: #e8f6ef;
+  text-align: center;
+}
+
+.admin-custom-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.admin-custom-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(124, 255, 178, 0.12);
+  background: rgba(124, 255, 178, 0.04);
+}
+
+.admin-custom-item div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.admin-custom-item p {
+  margin: 0;
+  color: #8eab9c;
+  font-size: 0.8rem;
+}
+
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.risk-chip--low {
+  color: #9ec9b3;
+  background: rgba(124, 255, 178, 0.08);
+}
+
+.risk-chip--medium {
+  color: #f3d27a;
+  background: rgba(243, 210, 122, 0.12);
+}
+
+.risk-chip--high {
+  color: #ffb27a;
+  background: rgba(255, 178, 122, 0.14);
+}
+
+.risk-chip--critical {
+  color: #ff8d8d;
+  background: rgba(255, 90, 90, 0.16);
+}
+
 .admin-session {
   display: flex;
   flex-wrap: wrap;

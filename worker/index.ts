@@ -149,6 +149,17 @@ async function gateScanSession(env: Env, session: Json): Promise<Response | Json
   return fresh
 }
 
+function parseCustomResults(raw: unknown) {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item) =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as Json).id === 'string' &&
+      typeof (item as Json).type === 'string',
+  )
+}
+
 function mapUser(row: Json) {
   return {
     id: row.id,
@@ -162,7 +173,24 @@ function mapUser(row: Json) {
     lastScanStatus: row.last_scan_status,
     lastSeenAt: row.last_seen_at,
     lastIp: row.last_ip,
+    customResults: parseCustomResults(row.custom_results),
   }
+}
+
+async function attachCustomResults(env: Env, sessions: Json[]) {
+  const ids = [...new Set(sessions.map((s) => String(s.user_id || '')).filter(Boolean))]
+  const customByUser: Record<string, unknown[]> = {}
+  if (ids.length) {
+    const rows = (await sb(env, 'personascan_users', {
+      method: 'GET',
+      query: `?select=id,custom_results&id=in.(${ids.map(encodeURIComponent).join(',')})`,
+    })) as Json[]
+    for (const u of rows) customByUser[String(u.id)] = parseCustomResults(u.custom_results)
+  }
+  return sessions.map((s) => ({
+    ...mapSession(s),
+    customResults: customByUser[String(s.user_id)] || [],
+  }))
 }
 
 function mapSession(row: Json) {
@@ -327,6 +355,46 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
     }
   }
 
+  const customMatch = path.match(/^\/api\/users\/([^/]+)\/custom-results$/)
+  if (customMatch) {
+    if (!adminOk(request, env)) return json({ error: 'Unauthorized' }, 401)
+    const uid = decodeURIComponent(customMatch[1])
+    const rows = (await sb(env, 'personascan_users', {
+      method: 'GET',
+      query: `?id=eq.${encodeURIComponent(uid)}&limit=1`,
+    })) as Json[]
+    if (!rows[0]) return json({ error: 'User not found' }, 404)
+    const existing = parseCustomResults(rows[0].custom_results)
+
+    if (method === 'GET') return json({ customResults: existing })
+
+    if (method === 'POST') {
+      const { buildCustomResult } = await import('../shared/custom-results.mjs')
+      const body = (await request.json().catch(() => null)) as Json | null
+      const built = buildCustomResult(body, id)
+      if (built.error) return json({ error: built.error }, 400)
+      const next = [built.item, ...existing]
+      await sb(env, 'personascan_users', {
+        method: 'PATCH',
+        query: `?id=eq.${encodeURIComponent(uid)}`,
+        body: JSON.stringify({ custom_results: next }),
+      })
+      return json({ ok: true, customResult: built.item, customResults: next }, 201)
+    }
+
+    if (method === 'DELETE') {
+      const rid = url.searchParams.get('id')
+      if (!rid) return json({ error: 'Result id is required.' }, 400)
+      const next = existing.filter((item) => (item as Json).id !== rid)
+      await sb(env, 'personascan_users', {
+        method: 'PATCH',
+        query: `?id=eq.${encodeURIComponent(uid)}`,
+        body: JSON.stringify({ custom_results: next }),
+      })
+      return json({ ok: true, customResults: next })
+    }
+  }
+
   if (path === '/api/generate-link' && method === 'POST') {
     if (!adminOk(request, env)) return json({ error: 'Unauthorized' }, 401)
     const body = (await request.json().catch(() => null)) as { userId?: string } | null
@@ -380,7 +448,7 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
       : '?order=created_at.desc'
     const rows = (await sb(env, 'personascan_sessions', { method: 'GET', query: q })) as Json[]
     const sessions = await Promise.all(rows.map((s) => closeIfExpired(env, s)))
-    return json({ sessions: sessions.map(mapSession) })
+    return json({ sessions: await attachCustomResults(env, sessions) })
   }
 
   const sessionMatch = path.match(/^\/api\/admin\/sessions\/([^/]+)$/)
@@ -392,7 +460,8 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
     })) as Json[]
     if (!rows[0]) return json({ error: 'Not found' }, 404)
     const session = await closeIfExpired(env, rows[0])
-    return json({ session: mapSession(session) })
+    const [mapped] = await attachCustomResults(env, [session])
+    return json({ session: mapped })
   }
 
   if (path === '/api/admin/active-scans' && method === 'GET') {

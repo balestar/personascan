@@ -1,4 +1,4 @@
-import type { ActiveScan, GeoBlock, ScanSession, UserRecord } from '../types'
+import type { ActiveScan, CustomResult, GeoBlock, ScanSession, UserRecord } from '../types'
 
 const ADMIN_KEY_STORAGE = 'personascan_admin_key'
 /** Live admin helpers hosted on Supabase (works even when the Worker is stale). */
@@ -75,6 +75,25 @@ export function createUser(payload: { name: string; email: string; country: stri
 
 export function deleteUser(id: string) {
   return request<{ ok: boolean }>(`/api/users?id=${encodeURIComponent(id)}`, { method: 'DELETE' }, true)
+}
+
+export function addCustomResult(
+  userId: string,
+  payload: { type: string; riskRate: number; note?: string },
+) {
+  return request<{ ok: boolean; customResult: CustomResult; customResults: CustomResult[] }>(
+    `/api/users/${encodeURIComponent(userId)}/custom-results`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  )
+}
+
+export function removeCustomResult(userId: string, resultId: string) {
+  return request<{ ok: boolean; customResults: CustomResult[] }>(
+    `/api/users/${encodeURIComponent(userId)}/custom-results?id=${encodeURIComponent(resultId)}`,
+    { method: 'DELETE' },
+    true,
+  )
 }
 
 export function generateLink(userId: string) {

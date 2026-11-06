@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { getSession } from '../lib/api'
+import { riskBand } from '../lib/customResults'
 import { outcomeLabel, outcomeOf } from '../lib/scanScoring'
-import type { DualSideResult, FindingOutcome, ScanFinding, ScanSession } from '../types'
+import type { CustomResult, DualSideResult, FindingOutcome, ScanFinding, ScanSession } from '../types'
 import { Modal } from './Modal'
 import { StreetViewPanel } from './StreetViewPanel'
 
@@ -32,6 +33,7 @@ const FEED_NAMES: Record<string, string> = {
 type Props = {
   open: boolean
   session: ScanSession | null
+  userCustomResults?: CustomResult[]
   onClose: () => void
   onCancel?: () => void
 }
@@ -120,7 +122,7 @@ function FindingDual({ finding, open, onToggle }: { finding: ScanFinding; open: 
   )
 }
 
-export function SessionDetailModal({ open, session, onClose, onCancel }: Props) {
+export function SessionDetailModal({ open, session, userCustomResults, onClose, onCancel }: Props) {
   const [live, setLive] = useState<ScanSession | null>(session)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -184,6 +186,10 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
     }>
   }
   const intelResults = intel.results || []
+  const customResults =
+    (view.customResults && view.customResults.length > 0
+      ? view.customResults
+      : userCustomResults) || []
 
   return (
     <Modal
@@ -249,6 +255,29 @@ export function SessionDetailModal({ open, session, onClose, onCancel }: Props) 
             <strong>{view.completedAt ? new Date(view.completedAt).toLocaleString() : '—'}</strong>
           </div>
         </div>
+
+        {customResults.length > 0 && (
+          <div className="detail-block">
+            <h3>Custom results (all sessions)</h3>
+            <p className="admin-empty">
+              Admin flags on this user. They apply to every session and stay hidden from the
+              recipient.
+            </p>
+            <ul className="admin-custom-list">
+              {customResults.map((item) => (
+                <li key={item.id} className="admin-custom-item" data-risk={riskBand(item.riskRate)}>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span className={`risk-chip risk-chip--${riskBand(item.riskRate)}`}>
+                      Risk {item.riskRate}
+                    </span>
+                    {item.note ? <p>{item.note}</p> : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {view.device && (
           <div className="detail-block">

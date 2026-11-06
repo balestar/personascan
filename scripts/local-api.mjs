@@ -5,7 +5,9 @@ import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
 import { DEFAULT_FROM, sendResendEmail } from '../shared/send-resend.mjs'
 import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
 import { anyapiConfigured, anyapiLookupIp } from '../shared/anyapi.mjs'
+import { buildCustomResult } from '../shared/custom-results.mjs'
 import {
+  attachCustomResultsToSessions,
   dbDeleteBlock,
   dbDeleteUser,
   dbGetSession,
@@ -15,6 +17,7 @@ import {
   dbListBlocks,
   dbListSessions,
   dbListUsers,
+  dbSetUserCustomResults,
   dbUpsertSession,
   dbUpsertUser,
 } from './supabase.mjs'
@@ -277,6 +280,34 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    const customMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/custom-results$/)
+    if (customMatch) {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const uid = decodeURIComponent(customMatch[1])
+      const user = await dbGetUser(uid)
+      if (!user) return json(res, { error: 'User not found' }, 404)
+      const existing = Array.isArray(user.customResults) ? user.customResults : []
+
+      if (req.method === 'GET') return json(res, { customResults: existing })
+
+      if (req.method === 'POST') {
+        const body = await readBody(req)
+        const built = buildCustomResult(body, createId)
+        if (built.error) return json(res, { error: built.error }, 400)
+        const next = [built.item, ...existing]
+        await dbSetUserCustomResults(uid, next)
+        return json(res, { ok: true, customResult: built.item, customResults: next }, 201)
+      }
+
+      if (req.method === 'DELETE') {
+        const rid = url.searchParams.get('id')
+        if (!rid) return json(res, { error: 'Result id is required.' }, 400)
+        const next = existing.filter((item) => item.id !== rid)
+        await dbSetUserCustomResults(uid, next)
+        return json(res, { ok: true, customResults: next })
+      }
+    }
+
     if (url.pathname === '/api/generate-link' && req.method === 'POST') {
       if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
       const body = await readBody(req)
@@ -317,6 +348,7 @@ const server = createServer(async (req, res) => {
       const userId = url.searchParams.get('userId') || undefined
       let sessions = await dbListSessions(userId)
       sessions = await Promise.all(sessions.map((s) => refreshSessionStatus(s)))
+      sessions = await attachCustomResultsToSessions(sessions)
       return json(res, { sessions })
     }
 
@@ -345,7 +377,8 @@ const server = createServer(async (req, res) => {
       if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
       const session = await refreshSessionStatus(await dbGetSession(decodeURIComponent(sessionDetail[1])))
       if (!session) return json(res, { error: 'Session not found' }, 404)
-      return json(res, { session })
+      const [withCustom] = await attachCustomResultsToSessions([session])
+      return json(res, { session: withCustom })
     }
 
     if (url.pathname === '/api/admin/active-scans' && req.method === 'GET') {
