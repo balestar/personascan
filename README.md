@@ -58,17 +58,18 @@ Also mirror the same secret names under
 so build and deploy share the same keys.
 
 Required runtime secrets: `ADMIN_KEY`, `SUPABASE_ANON_KEY`  
+Invite email: `RESEND_API_KEY` (from `EMAIL_FROM` / `noreply@personascan.net` — verify the domain in Resend)  
 Public (no key / free): PhishTank, NVD  
 Free after signup: `VIRUSTOTAL_API_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY`  
 Partner: `SCAMSNIFFER_API_KEY`, `BLOCKAID_API_KEY`, …
 
-Non-secret vars live in `wrangler.jsonc`: `SCAN_SITE_URL`, `SITE_URL`, `SUPABASE_URL`.
+Non-secret vars live in `wrangler.jsonc`: `SCAN_SITE_URL`, `SITE_URL`, `SUPABASE_URL`, `EMAIL_FROM`.
 
 ## Admin flow
 
 1. Open `/admin` and sign in with the admin key.
 2. Create a user — a secured link is generated automatically.
-3. Copy / email the link.
+3. Send the invite from the compose modal (Resend → `noreply@personascan.net`).
 4. Open the live scan link to watch dual-verified results.
 
 ## Scan flow

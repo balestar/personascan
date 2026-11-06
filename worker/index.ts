@@ -282,6 +282,38 @@ async function routeApi(request: Request, env: Env): Promise<Response> {
     return json({ user: mapUser(rows[0]), link: session.link, expiresAt: session.expiresAt, session })
   }
 
+  if (path === '/api/admin/send-email' && method === 'POST') {
+    if (!adminOk(request, env)) return json({ error: 'Unauthorized' }, 401)
+    const body = (await request.json().catch(() => null)) as {
+      to?: string
+      subject?: string
+      html?: string
+      text?: string
+    } | null
+    const to = String(body?.to || '').trim()
+    const subject = String(body?.subject || '').trim()
+    const html = String(body?.html || '').trim()
+    const text = String(body?.text || '').trim()
+    if (!to || !subject || !html) {
+      return json({ error: 'to, subject, and html are required.' }, 400)
+    }
+    const { DEFAULT_FROM, sendResendEmail } = await import('../shared/send-resend.mjs')
+    const result = await sendResendEmail({
+      apiKey: String(env.RESEND_API_KEY || ''),
+      from: String(env.EMAIL_FROM || DEFAULT_FROM),
+      to,
+      subject,
+      html,
+      text,
+    })
+    if (!result.ok) {
+      const status =
+        result.status && result.status >= 400 && result.status < 600 ? result.status : 502
+      return json({ error: result.error }, status)
+    }
+    return json({ ok: true, id: result.id, from: result.from, to: result.to })
+  }
+
   // ── sessions ────────────────────────────────────────────────────────
   if (path === '/api/admin/sessions' && method === 'GET') {
     if (!adminOk(request, env)) return json({ error: 'Unauthorized' }, 401)

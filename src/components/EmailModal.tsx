@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { sendInviteEmail } from '../lib/api'
 import { blankCustomEmail, oneTimeScanTemplate } from '../lib/emailTemplates'
 import type { UserRecord } from '../types'
 import { Modal } from './Modal'
@@ -34,6 +35,7 @@ export function EmailModal({ open, user, link, onClose }: Props) {
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [notice, setNotice] = useState('')
+  const [sending, setSending] = useState(false)
 
   const template = useMemo(() => {
     if (!user) return null
@@ -101,6 +103,25 @@ export function EmailModal({ open, user, link, onClose }: Props) {
     setNotice('Opening mail client…')
   }
 
+  async function sendEmail() {
+    if (!user || sending) return
+    setSending(true)
+    setNotice('')
+    try {
+      const result = await sendInviteEmail({
+        to: user.email,
+        subject,
+        html: previewHtml,
+        text: body,
+      })
+      setNotice(`Sent from ${result.from}`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Send failed')
+    } finally {
+      setSending(false)
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -114,11 +135,16 @@ export function EmailModal({ open, user, link, onClose }: Props) {
           <button type="button" className="vault-btn vault-btn-ghost" onClick={() => void copyBody()}>
             Copy text
           </button>
-          <button type="button" className="vault-btn vault-btn-ghost" onClick={() => void copyHtml()}>
-            Copy HTML
-          </button>
-          <button type="button" className="vault-btn vault-btn-glow" onClick={openMailClient} disabled={!user}>
+          <button type="button" className="vault-btn vault-btn-ghost" onClick={openMailClient} disabled={!user}>
             Open mail app
+          </button>
+          <button
+            type="button"
+            className="vault-btn vault-btn-glow"
+            onClick={() => void sendEmail()}
+            disabled={!user || sending}
+          >
+            {sending ? 'Sending…' : 'Send email'}
           </button>
         </div>
       }
@@ -163,7 +189,7 @@ export function EmailModal({ open, user, link, onClose }: Props) {
                 <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} />
               </label>
               <p className="mail-hint">
-                Private one-time link · 20-minute session · do not forward
+                From noreply@personascan.net · private one-time link · 20-minute session
               </p>
               {notice ? <p className="mail-notice">{notice}</p> : null}
             </section>

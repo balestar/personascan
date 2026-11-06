@@ -34,6 +34,7 @@
     "SUPABASE_URL": "https://hxapjyxzvmouwrhdgmsx.supabase.co",
     "SCAN_SITE_URL": "https://secure.personascan.net",
     "SITE_URL": "https://secure.personascan.net",
+    "EMAIL_FROM": "Persona Scan <noreply@personascan.net>",
     "SCAMSNIFFER_API_URL": "https://api.scamsniffer.io",
     "BLOCKAID_API_URL": "https://api.blockaid.io",
     "GOOGLE_PLAY_INTEGRITY_ENABLED": "0",

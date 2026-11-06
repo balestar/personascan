@@ -8,6 +8,7 @@
 
 # Persona Scan DB: https://hxapjyxzvmouwrhdgmsx.supabase.co (tables personascan_*)
 # Netlify env: SUPABASE_URL, SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY, ADMIN_KEY,
+# RESEND_API_KEY, EMAIL_FROM=Persona Scan <noreply@personascan.net>,
 # SCAN_SITE_URL=https://secure.personascan.net (generated /scan links)
 # Marketing site: personascan.net
 

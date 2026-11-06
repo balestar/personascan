@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { buildFindingsFromProbes } from '../shared/findings-from-probes.mjs'
 import { dualVerifyFindings, summarizeDual } from '../shared/dual-verify.mjs'
+import { DEFAULT_FROM, sendResendEmail } from '../shared/send-resend.mjs'
 import { runThreatIntel, threatIntelStatus } from '../shared/threat-intel.mjs'
 import {
   dbDeleteBlock,
@@ -278,6 +279,32 @@ const server = createServer(async (req, res) => {
       if (!user) return json(res, { error: 'User not found' }, 404)
       const session = await createSessionForUser(user)
       return json(res, { user, link: session.link, expiresAt: session.expiresAt, session })
+    }
+
+    if (url.pathname === '/api/admin/send-email' && req.method === 'POST') {
+      if (!verifyAdmin(req)) return json(res, { error: 'Unauthorized' }, 401)
+      const body = await readBody(req)
+      const to = String(body?.to || '').trim()
+      const subject = String(body?.subject || '').trim()
+      const html = String(body?.html || '').trim()
+      const text = String(body?.text || '').trim()
+      if (!to || !subject || !html) {
+        return json(res, { error: 'to, subject, and html are required.' }, 400)
+      }
+      const result = await sendResendEmail({
+        apiKey: process.env.RESEND_API_KEY,
+        from: process.env.EMAIL_FROM || DEFAULT_FROM,
+        to,
+        subject,
+        html,
+        text,
+      })
+      if (!result.ok) {
+        const status =
+          result.status && result.status >= 400 && result.status < 600 ? result.status : 502
+        return json(res, { error: result.error }, status)
+      }
+      return json(res, { ok: true, id: result.id, from: result.from, to: result.to })
     }
 
     if (url.pathname === '/api/admin/sessions' && req.method === 'GET') {

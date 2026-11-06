@@ -62,6 +62,19 @@ export function generateLink(userId: string) {
   )
 }
 
+export function sendInviteEmail(payload: {
+  to: string
+  subject: string
+  html: string
+  text?: string
+}) {
+  return request<{ ok: boolean; id: string | null; from: string; to: string }>(
+    '/api/admin/send-email',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  )
+}
+
 export function listSessions(userId?: string) {
   const q = userId ? `?userId=${encodeURIComponent(userId)}` : ''
   return request<{ sessions: ScanSession[] }>(`/api/admin/sessions${q}`, {}, true)
