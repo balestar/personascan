@@ -729,7 +729,19 @@ export default {
         return json({ error: error instanceof Error ? error.message : String(error) }, 500)
       }
     }
-    if (env.ASSETS) return env.ASSETS.fetch(request)
+    if (env.ASSETS) {
+      const res = await env.ASSETS.fetch(request)
+      const accept = request.headers.get('accept') || ''
+      const isHtml =
+        url.pathname === '/' ||
+        url.pathname.endsWith('.html') ||
+        (!url.pathname.includes('.') && accept.includes('text/html'))
+      if (!isHtml) return res
+      const headers = new Headers(res.headers)
+      headers.set('Cache-Control', 'no-store, must-revalidate')
+      headers.set('CDN-Cache-Control', 'no-store')
+      return new Response(res.body, { status: res.status, headers })
+    }
     return new Response('Missing ASSETS binding', { status: 500 })
   },
 }

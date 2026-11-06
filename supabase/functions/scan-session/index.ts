@@ -72,6 +72,8 @@ Deno.serve(async (req: Request) => {
   const body = (await req.json().catch(() => null)) as {
     token?: string
     action?: string
+    device?: { name?: string; model?: string }
+    deviceName?: string
   } | null
   const token = String(body?.token || "").trim()
   const action = String(body?.action || "").trim()
@@ -86,9 +88,54 @@ Deno.serve(async (req: Request) => {
   if (error) return json({ error: error.message }, 500)
   if (!data) return json({ error: "Invalid or expired scan link" }, 410)
 
-  const session = data as Record<string, unknown>
+  let session = data as Record<string, unknown>
+  const expiresAt = new Date(String(session.expires_at || "")).getTime()
+  if (session.status !== "blocked" && session.status !== "expired" && Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    const closedAt = new Date().toISOString()
+    await sb.from("personascan_sessions").update({ status: "expired" }).eq("id", session.id)
+    if (session.user_id) {
+      await sb
+        .from("personascan_users")
+        .update({ last_scan_status: "expired", last_seen_at: closedAt })
+        .eq("id", session.user_id)
+    }
+    session = { ...session, status: "expired" }
+  }
+  if (session.status === "blocked") {
+    return json({ error: "Access from this network location is blocked by policy.", blocked: true }, 403)
+  }
+  if (session.status === "expired") {
+    return json({ error: "This scan session has expired and can no longer be opened." }, 410)
+  }
+
   const summary = (session.summary || {}) as Record<string, unknown>
   const dumped = Boolean(session.dumped_at || summary.dumped)
+
+  if (action === "open") {
+    if (session.status !== "pending" && session.status !== "active" && session.status !== "completed") {
+      return json({ error: "This scan session has expired and can no longer be opened." }, 410)
+    }
+    const deviceName =
+      body?.deviceName || body?.device?.name || body?.device?.model || session.device_name
+    const patch = {
+      status: session.status === "pending" ? "active" : session.status,
+      opened_at: session.opened_at || new Date().toISOString(),
+      device_name: deviceName,
+      device: body?.device || session.device,
+    }
+    const upd = await sb.from("personascan_sessions").update(patch).eq("id", session.id).select("*").maybeSingle()
+    if (upd.error) return json({ error: upd.error.message }, 500)
+    const updated = { ...session, ...patch, ...(upd.data || {}) }
+    return json({
+      user: {
+        name: session.user_name,
+        email: session.user_email,
+        country: session.user_country,
+      },
+      expiresAt: session.expires_at,
+      session: mapSession(updated),
+    })
+  }
 
   if (action === "dump") {
     if (dumped) {

@@ -173,7 +173,7 @@ export function removeGeoBlock(id: string) {
   )
 }
 
-export function getScanSession(
+export async function getScanSession(
   token: string,
   device?: {
     name: string
@@ -185,15 +185,31 @@ export function getScanSession(
     timezoneOffset?: number
   },
 ) {
-  return request<{
-    user: { name: string; email: string; country: string }
-    expiresAt: string
-    session: ScanSession
-    blocked?: boolean
-  }>(`/api/scan/${encodeURIComponent(token)}`, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'open', device }),
-  })
+  try {
+    return await supabaseFn<{
+      user: { name: string; email: string; country: string }
+      expiresAt: string
+      session: ScanSession
+      blocked?: boolean
+    }>('scan-session', {
+      method: 'POST',
+      body: JSON.stringify({ token, action: 'open', device }),
+    })
+  } catch (err) {
+    try {
+      return await request<{
+        user: { name: string; email: string; country: string }
+        expiresAt: string
+        session: ScanSession
+        blocked?: boolean
+      }>(`/api/scan/${encodeURIComponent(token)}`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'open', device }),
+      })
+    } catch {
+      throw err instanceof Error ? err : new Error('Unable to open scan link')
+    }
+  }
 }
 
 export function runScan(

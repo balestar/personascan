@@ -32,6 +32,12 @@ worker/_gz*.txt
 # Netlify
 .netlify
 
+# Supabase CLI scratch
+supabase/.temp/
+
+# Supabase CLI scratch
+supabase/.temp/
+
 # Local API data
 .data
 

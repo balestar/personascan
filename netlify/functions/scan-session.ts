@@ -118,6 +118,7 @@ export default async (req: Request, context: Context) => {
       probes?: Record<string, unknown>
       device?: {
         name?: string
+        model?: string
         userAgent?: string
         platform?: string
         language?: string
@@ -142,6 +143,7 @@ export default async (req: Request, context: Context) => {
       session.title = deviceName
       session.device = {
         name: deviceName,
+        model: body.device?.model,
         userAgent: ua,
         platform: body.device?.platform,
         language: body.device?.language,
